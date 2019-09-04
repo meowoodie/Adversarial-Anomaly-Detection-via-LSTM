@@ -1,2 +1,4 @@
-# Adversarial-RNN
-A adversarial learning framework of RNN for marked spatio-temporal event detection.
+Adversarial Recurrent Neural Networks
+===
+
+A adversarial learning framework of Recurrent Neural Networks (RNN).
