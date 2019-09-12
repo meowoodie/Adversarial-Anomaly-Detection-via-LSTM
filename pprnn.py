@@ -100,16 +100,17 @@ class PointProcessRNN(object):
         # calculate lambda (conditional intensity) for each batch
         ts      = []
         for b in range(batch_size):
-            b_ts_cand    = cand_ts[b, :, :]                                               # [n_sample, 3]
-            b_lstm_state = tf.expand_dims(lstm_state[b, :], -1)                           # [lstm_hidden_size]
-            b_accept     = accept[b, :, :]                                                # [n_sample, 1]
+            # candidates preparation
+            b_ts_cand    = cand_ts[b, :, :]                                         # [n_sample, 3]
+            b_lstm_state = tf.expand_dims(lstm_state[b, :], -1)                     # [lstm_hidden_size]
+            b_accept     = accept[b, :, :]                                          # [n_sample, 1]
             b_lam        = self.mu + tf.exp(tf.linalg.matmul(tf.linalg.matmul(b_ts_cand, self.K), b_lstm_state)) # [n_sample, 1]
             # reject samples
-            b_mask       = tf.squeeze(tf.cast(b_accept * upperb > b_lam, dtype=tf.int32)) # [n_sample]
+            b_mask = tf.squeeze(tf.cast(b_accept * upperb > b_lam, dtype=tf.int32)) # [n_sample]
             # get first non-zero sample
-            b_ts         = tf.gather(
+            b_ts   = tf.gather_nd(
                 b_ts_cand,
-                tf.squeeze(tf.where(tf.not_equal(b_mask, 0)))[0])
+                tf.where(tf.not_equal(b_mask, 0)))[0]
             ts.append(b_ts)
         ts = tf.stack(ts)
         return ts, 0
@@ -125,17 +126,18 @@ class PointProcessRNN(object):
         # 
         print(sess.run(self.output))
 
-    def debug(self, sess, batch_size):
-        tf_lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_hidden_size)
-        lstm_state   = tf_lstm_cell.zero_state(5, dtype=tf.float32).h
-        ts, l = self._sample_ts(batch_size, lstm_state=lstm_state, n_sample=10, upperb=2)
-        _, next_state = tf.nn.static_rnn(tf_lstm_cell, [ts], initial_state=lstm_state, dtype=tf.float32)
+    # def debug(self, sess, batch_size):
+    #     tf_lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_hidden_size)
+    #     lstm_state   = tf_lstm_cell.zero_state(batch_size, dtype=tf.float32)
+    #     ts, l = self._sample_ts(batch_size, lstm_state=lstm_state.h, n_sample=10, upperb=2)
+    #     # ts  = tf.random.uniform(shape=[batch_size, 3], minval=0, maxval=1, dtype=tf.float32)
+    #     res = tf.nn.static_rnn(tf_lstm_cell, [ts], initial_state=lstm_state, dtype=tf.float32)
 
-        # initialize variables
-        init_op = tf.global_variables_initializer()
-        sess.run(init_op)
+    #     # initialize variables
+    #     init_op = tf.global_variables_initializer()
+    #     sess.run(init_op)
 
-        print(sess.run(next_state))
+    #     print(sess.run(res))
         
 
 
