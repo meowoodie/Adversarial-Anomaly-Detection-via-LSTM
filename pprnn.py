@@ -62,7 +62,7 @@ class PointProcessRNN(object):
             last_ts         = ts    # reset last_ts
             last_lstm_state = state # reset last_lstm_state
         output = tf.stack(output, axis=1) # [batch_size, step_size, ts_len]
-        loglik = tf.stack(loglik, axis=1) # [batch_size, step_size, 1]
+        # loglik = tf.stack(loglik, axis=1) # [batch_size, step_size, 1]
         return output, loglik, state
 
     def _customized_lstm_cell(self, 
@@ -108,6 +108,11 @@ class PointProcessRNN(object):
             # reject samples
             b_mask = tf.squeeze(tf.cast(b_accept * upperb > b_lam, dtype=tf.int32)) # [n_sample]
             # get first non-zero sample
+            # NOTE: 
+            # the shape of return tensor of tf.gather cannot be inferred, which will lead to a ValueError
+            # (Cannot iterate over a shape with unknown rank). Because, in tf.nn.rnn_cell.BasicLSTMCell,
+            # the function requires the shape of inputs should be inferred via shape inference, as shown 
+            # in https://www.tensorflow.org/api_docs/python/tf/nn/static_rnn
             b_ts   = tf.gather_nd(
                 b_ts_cand,
                 tf.where(tf.not_equal(b_mask, 0)))[0]
@@ -159,4 +164,4 @@ if __name__ == "__main__":
         
         pprnn = PointProcessRNN(step_size, lstm_hidden_size, ts_len)
         
-        pprnn.debug(sess, batch_size)
+        pprnn.train(sess, batch_size)
