@@ -24,8 +24,8 @@ class PointProcessRNN(object):
         self.step_size         = step_size        # step size of LSTM
         self.mu                = 0
 
-        # # define model weights
-        self.K = tf.get_variable(name="K", initializer=INIT_PARAM_RATIO * tf.random_normal([3, self.lstm_hidden_size]))
+        # define model weights
+        self.W = tf.get_variable(name="W", initializer=INIT_PARAM_RATIO * tf.random_normal([self.lstm_hidden_size, 1]))
         # # - time weights
         # self.Wt  = tf.get_variable(name="Wt", initializer=INIT_PARAM_RATIO * tf.random_normal([self.lstm_hidden_size, self.t_dim]))
         # self.bt  = tf.get_variable(name="bt", initializer=INIT_PARAM_RATIO * tf.random_normal([self.t_dim]))
@@ -43,52 +43,48 @@ class PointProcessRNN(object):
     def _recurrent_structure(self, batch_size):
         """Recurrent structure with customized LSTM cells."""
         # create a basic LSTM cell
-        tf_lstm_cell    = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_hidden_size)
+        self.lstm_cell  = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_hidden_size)
         # defining initial basic LSTM hidden state [2, batch_size, lstm_hidden_size]
         # - lstm_state.h: hidden state [batch_size, lstm_hidden_size]
         # - lstm_state.c: cell state   [batch_size, lstm_hidden_size]
-        init_lstm_state = tf_lstm_cell.zero_state(batch_size, dtype=tf.float32)
+        init_lstm_state = self.lstm_cell.zero_state(batch_size, dtype=tf.float32)
         # init_t: initial output [batch_size, 1]
         init_t          = tf.zeros([batch_size], dtype=tf.float32)
         # concatenate each customized LSTM cell by loop
         outputs = [] # [batch_size, step_size, 3]
-        logliks = [] # [batch_size, step_size, 1]
+        states  = [] # [batch_size, step_size, 1]
         last_t, last_lstm_state = init_t, init_lstm_state # loop initialization
         for _ in range(self.step_size):
-            ts, loglik, state = self._customized_lstm_cell(batch_size, tf_lstm_cell, last_lstm_state, last_t)
+            ts, lstm_state = self._customized_lstm_cell(batch_size, last_lstm_state, last_t)
             outputs.append(ts)            # record single output  [batch_size, 1, 3]
-            logliks.append(loglik)        # record likelihood     [batch_size, 1, 1]
+            states.append(lstm_state)     # record likelihood     [batch_size, 1, 1]
             last_t          = ts[:, 0]    # reset last_ts         [batch_size]
-            last_lstm_state = state       # reset last_lstm_state [batch_size, lstm_hidden_size]
+            last_lstm_state = lstm_state  # reset last_lstm_state [batch_size, lstm_hidden_size]
         outputs = tf.stack(outputs, axis=1) # [batch_size, step_size, 3]
-        logliks = tf.stack(logliks, axis=1) # [batch_size, step_size, 1]
-        return outputs, logliks, state
+        return outputs, states
 
     def _customized_lstm_cell(self, 
             batch_size, 
-            tf_lstm_cell,    # tensorflow LSTM cell object, e.g. 'tf.nn.rnn_cell.BasicLSTMCell'
             last_lstm_state, # last state as input of this LSTM cell
             last_t):        # last_t + delta_t as input of this LSTM cell
         """
         Customized Stochastic LSTM Cell
         The customized LSTM cell takes external input and the hidden state of the last moment
-        as input, then return the external output as well as the hidden state at the next moment. 
+        as input, then return external output as well as the hidden state at the next moment. 
         The reason that avoids using tensorflow builtin rnn structure is that, 
         """
         # stochastic single output and its likelihood
-        ts     = self._sample_ts(batch_size, last_t, last_lstm_state.h) # [batch_size, 3]
-        # calculate log likelihood of above single output
-        loglik = self._log_likelihood(ts, last_lstm_state.h)            # [batch_size, 1]
+        ts = self._sample_ts(batch_size, last_t, last_lstm_state) # [batch_size, 3]
         # one step rnn structure
         # - ts is a tensor that contains a single step of data points with shape [batch_size, 3]
-        # - state is a tensor of hidden state with shape                         [2, batch_size, state_size]
-        _, next_state = tf.nn.static_rnn(tf_lstm_cell, [ts], initial_state=last_lstm_state, dtype=tf.float32)
-        return ts, loglik, next_state
+        # - state is a tensor of hidden state with shape                         [2, batch_size, lstm_hidden_size]
+        _, next_lstm_state = tf.nn.static_rnn(self.lstm_cell, [ts], initial_state=last_lstm_state, dtype=tf.float32)
+        return ts, next_lstm_state
 
     def _sample_ts(self, batch_size, last_t, lstm_state, n_sample=1000, upperb=1000):
         """
-        Sample Single Output and Its Likelihood Value
-        Given the last hidden state of the RNN, the function samples a single output based on 
+        Sample Single Output (Time and Space)
+        Given the last hidden state of the RNN, the function samples a single output (time and space) based on 
         the intensity function which is defined by the hidden state. 
         """
         # calculate lambda (conditional intensity) for each batch
@@ -102,16 +98,18 @@ class PointProcessRNN(object):
             # generate acceptence rate matrix [batch_size, n_sample]
             accept  = tf.random.uniform(shape=[n_sample, 1], minval=0, maxval=1, dtype=tf.float32)
             # calculate lambda for each sample
-            state   = tf.expand_dims(lstm_state[b, :], -1) # [lstm_hidden_size, 1]
-            lam     = self.__lambda(cand_ts, state)        # [n_sample, 1]
+            state   = tf.nn.rnn_cell.LSTMStateTuple(
+                c=tf.tile(tf.expand_dims(lstm_state.c[b, :], 0), [n_sample, 1]), # [1, lstm_hidden_size]
+                h=tf.tile(tf.expand_dims(lstm_state.h[b, :], 0), [n_sample, 1])) # [1, lstm_hidden_size]
+            lam     = self._lambda(cand_ts, state)                               # [n_sample, 1]
             # reject samples
-            mask    = tf.squeeze(tf.cast(accept * upperb > lam, dtype=tf.int32))                   # [n_sample]
+            mask    = tf.squeeze(tf.cast(accept * upperb > lam, dtype=tf.int32)) # [n_sample]
             # get first non-zero sample
             # NOTE: 
             # the shape of return tensor of tf.gather cannot be inferred, which will lead to a ValueError
-            # (Cannot iterate over a shape with unknown rank). Because, in tf.nn.rnn_cell.BasicLSTMCell,
-            # the function requires the shape of inputs should be inferred via shape inference, as shown 
-            # in https://www.tensorflow.org/api_docs/python/tf/nn/static_rnn
+            # (Cannot iterate over a shape with unknown rank). Because, function tf.nn.rnn_cell.BasicLSTMCell,
+            # requires the shape of inputs should be inferred via shape inference, as shown in
+            # https://www.tensorflow.org/api_docs/python/tf/nn/static_rnn
             b_ts = tf.gather_nd(
                 cand_ts,
                 tf.where(tf.not_equal(mask, 0)))[0]
@@ -119,13 +117,17 @@ class PointProcessRNN(object):
         ts = tf.stack(ts)
         return ts
 
-    def __lambda(self, ts, lstm_state):
+    def _lambda(self, ts, last_lstm_state):
         """
         conditional intensity given history embedding `lstm_state` and current point `ts`
         """
-        return self.mu + tf.exp(tf.linalg.matmul(tf.linalg.matmul(ts, self.K), lstm_state))
+        # calculate the hidden state for the next moment (the information of current point will be embedded into hidden state)
+        _, next_lstm_state = tf.nn.static_rnn(self.lstm_cell, [ts], initial_state=last_lstm_state, dtype=tf.float32)
+        # calculate the lambda for the current moment
+        lam = tf.exp(tf.linalg.matmul(next_lstm_state.h, self.W))
+        return lam
 
-    def _log_likelihood(self, ts, lstm_state):
+    def _log_likelihood(self, outputs, states):
         """
         log likelihood given history embedding `lstm_state` and current point `ts`
         """
@@ -135,17 +137,20 @@ class PointProcessRNN(object):
         """
         """
         # define network structure
-        self.outputs, self.logliks, self.final_state = self._recurrent_structure(batch_size)
+        self.outputs, self.states = self._recurrent_structure(batch_size)
         # initialize variables
         init_op = tf.global_variables_initializer()
         sess.run(init_op)
         # 
         print(sess.run(self.outputs))
+        print(sess.run(self.states))
 
     # def debug(self, sess, batch_size):
-    #     tf_lstm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_hidden_size)
-    #     lstm_state   = tf_lstm_cell.zero_state(batch_size, dtype=tf.float32)
-    #     ts = self._sample_ts(batch_size, last_t=[0, .88, .88, .99, .99], lstm_state=lstm_state.h, n_sample=10, upperb=2)
+    #     self.lstm_cell  = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_hidden_size)
+    #     init_lstm_state = self.lstm_cell.zero_state(batch_size, dtype=tf.float32)
+
+    #     # res = _lambda(, lstm_state)
+    #     ts = self._sample_ts(batch_size, last_t=[0, .88, .88, .99, .99], lstm_state=init_lstm_state, n_sample=10, upperb=2)
     #     # res = tf.nn.static_rnn(tf_lstm_cell, [ts], initial_state=lstm_state, dtype=tf.float32)
 
     #     # initialize variables
