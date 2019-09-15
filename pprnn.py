@@ -11,6 +11,7 @@ A toy example is also provided at the tail of this script.
 
 import sys
 import arrow
+import utils
 import numpy as np
 import tensorflow as tf
 
@@ -47,6 +48,7 @@ def last_state_before_t(t, T, C, H):
     h_size = tf.shape(H)[2] # lstm_hidden_size
 
     # append a zero state at the begining of the points for each batch
+    # NOTE: for t < t_0, a zero state is applied here.
     init_states = tf.zeros([1, batch_size, lstm_hidden_size])
     C           = tf.concat([init_states, C], axis=0)
     H           = tf.concat([init_states, H], axis=0)
@@ -62,6 +64,7 @@ def last_state_before_t(t, T, C, H):
         (inds, i),
         initializer=(tf.zeros(h_size), tf.zeros(h_size)))
     return last_c, last_h                 # [batch_size, lstm_hidden_size]
+
 
 
 class MSTPP_RNN(object):
@@ -85,6 +88,8 @@ class MSTPP_RNN(object):
 
     def _recurrent_structure(self, batch_size, is_input=False):
         """Recurrent structure with customized LSTM cells"""
+        # define input variable if is_input is True [batch_size, step_size, n_output]
+        self.input      = tf.placeholder(tf.float32, [batch_size, self.step_size, self.n_output]) 
         # LSTM structure initialization
         # - create a basic LSTM cell
         self.lstm_cell  = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_hidden_size)
@@ -100,9 +105,11 @@ class MSTPP_RNN(object):
         states  = [] # (step_size [2, batch_size, lstm_hidden_size])
         last_t, last_lstm_state = init_t, init_lstm_state # loop initialization
         # concatenate each customized LSTM cell iteratively
-        for _ in range(self.step_size):
+        for i in range(self.step_size):
+            # use external input if is_input is true
+            _input = self.input[:, i, :] if is_input is True else None
             # one step in LSTM
-            output, lam, lstm_state = self._customized_lstm_cell(batch_size, last_lstm_state, last_t, is_input)
+            output, lam, lstm_state = self._customized_lstm_cell(batch_size, last_lstm_state, last_t, _input)
             # record outputs and states history
             outputs.append(output)         # [batch_size, n_output]
             lams.append(lam)               # [batch_size, 1]
@@ -116,23 +123,25 @@ class MSTPP_RNN(object):
             batch_size, 
             last_lstm_state, # last state as input of this LSTM cell
             last_t,          # get samples from last_t to T
-            is_input):       # is input data available
+            _input):         # single input
         """
         Customized Stochastic LSTM Cell
-        The customized LSTM cell takes external input and the hidden state of the last moment
-        as input, then return external output as well as the hidden state at the next moment. 
-        The reason that avoids using tensorflow builtin rnn structure is that, 
+        The customized LSTM cell takes external input or generates random samples as input of the next moment. 
+        And it returns a single output as well as the hidden state at the next moment.
         """
-        if is_input:
+        if _input is not None:
             # use data as external input to the LSTM
-            pass
+            ts  = _input # [batch_size, n_output]
+            lam = self._lambda(ts, last_lstm_state)
         else:
             # sample spatio-temporal points via thinning algorithm
-            ts, lam = self._sample_ts(batch_size, last_lstm_state, last_t)             # [batch_size, 3]
-        output  = ts
+            ts, lam = self._sample_ts(batch_size, last_lstm_state, last_t) # [batch_size, 3]
+        # merge spatio-temporal points and marks as final output
+        # TODO: add marks
+        output = ts
         # one step rnn structure
-        # - output is a tensor that contains a single step of data points with shape [batch_size, n_output]
-        # - state is a tensor of hidden state with shape                             [2, batch_size, lstm_hidden_size]
+        # - output is a tensor that contains a single step of data points    [batch_size, n_output]
+        # - state contains two tensors in hidden state                       [2, batch_size, lstm_hidden_size]
         _, next_lstm_state = tf.nn.static_rnn(self.lstm_cell, [output], initial_state=last_lstm_state, dtype=tf.float32)
         return output, lam, next_lstm_state
 
@@ -242,32 +251,93 @@ class MSTPP_RNN(object):
         
         print(sess.run(loglik))
 
-    def train_mle(self, sess, batch_size):
+    def train_mle(self, sess, batch_size, 
+            data,       # external input for the LSTM [n_data, step_size, n_output]
+            test_ratio, # fraction of data only for test
+            epoches=10, # number of epoches (how many times is the entire dataset going to be trained)
+            lr=1e-2):   # learning rate
         """
         """
         # define network structure
-        outputs, lams, states = self._recurrent_structure(batch_size)
+        outputs, lams, states = self._recurrent_structure(batch_size, is_input=True)
+        # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
         loglik = self._log_likelihood(outputs, lams, states)
+        cost   = -loglik
+        # Adam optimizer
+        global_step   = tf.Variable(0, trainable=False)
+        learning_rate = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
+        optimizer     = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(cost, global_step=global_step)
+        # initialize variables
+        init_op = tf.global_variables_initializer()
+        sess.run(init_op)
+        print("[%s] parameters are initialized." % arrow.now(), file=sys.stderr)
+
+        # data configurations
+        n_data    = data.shape[0]             # number of data samples
+        n_test    = int(n_data * test_ratio)  # number of test samples
+        n_train   = n_data - n_test           # number of train samples
+        n_batches = int(n_train / batch_size) # number of batches
+        # training over epoches
+        for epoch in range(epoches):
+            # shuffle indices of the training samples
+            shuffled_ids = np.arange(n_data)
+            np.random.shuffle(shuffled_ids)
+            shuffled_train_ids = shuffled_ids[:n_train]
+            shuffled_test_ids  = shuffled_ids[-n_test:]
+
+            # training over batches
+            avg_train_cost = []
+            avg_test_cost  = []
+            for b in range(n_batches):
+                idx             = np.arange(batch_size * b, batch_size * (b + 1))
+                # training and testing indices selected in current batch
+                batch_train_ids = shuffled_train_ids[idx]
+                batch_test_ids  = shuffled_test_ids[:batch_size]
+                # training and testing batch data
+                batch_train = data[batch_train_ids, :, :]
+                batch_test  = data[batch_test_ids, :, :]
+                # optimization procedure
+                sess.run(optimizer, feed_dict={self.input: batch_train})
+                # cost for train batch and test batch
+                train_cost = sess.run(cost, feed_dict={self.input: batch_train})
+                test_cost  = sess.run(cost, feed_dict={self.input: batch_test})
+                print(train_cost, test_cost)
+                # record cost for each batch
+                avg_train_cost.append(train_cost)
+                avg_test_cost.append(test_cost)
+
+            # training log output
+            avg_train_cost = np.mean(avg_train_cost)
+            avg_test_cost  = np.mean(avg_test_cost)
+            print('[%s] Epoch %d (n_train_batches=%d, batch_size=%d)' % (arrow.now(), epoch, n_batches, batch_size), file=sys.stderr)
+            print('[%s] Train cost:\t%f' % (arrow.now(), avg_train_cost), file=sys.stderr)
+            print('[%s] Test cost:\t%f' % (arrow.now(), avg_test_cost), file=sys.stderr)
         
+        # save all training cost into numpy file.
+        np.savetxt("train_cost.txt", all_train_cost, delimiter=",")
 
-
+        
 
 if __name__ == "__main__":
-    np.random.seed(1)
-    tf.set_random_seed(1)
-
-    data = np.random.rand(10, 10, 1)
-    data.sort(axis=1)
-    # print(data)
-
-    batch_size       = 5
-    step_size        = 10
-    lstm_hidden_size = 7
+    # np.random.seed(1)
+    # tf.set_random_seed(1)
 
     with tf.Session() as sess:
-        
+        # data preparation
+        data       = np.load("data/northcal.earthquake.perseason.npy")
+        da         = utils.DataAdapter(init_data=data, S=[[-1., 1.], [-1., 1.]], T=[0., 1.])
+        data       = da.normalize(data)[:, 1:21, :]
+        print(data)
+        print(data.shape)
+        # model configurations
+        lstm_hidden_size = 7
+        # training configurations
+        step_size  = np.shape(data)[1]
+        batch_size = 5 
+        test_ratio = 0.1
+        epoches    = 10
+        lr         = 1e-2
+        # define MSTPP_RNN
         pprnn = MSTPP_RNN(step_size, lstm_hidden_size)
-        
-        print(s_grid(5))
-
-        pprnn.train_gan(sess, batch_size)
+        # train via mle
+        pprnn.train_mle(sess, batch_size, data, test_ratio, epoches, lr)
