@@ -14,6 +14,7 @@ import arrow
 import utils
 import numpy as np
 import tensorflow as tf
+from decimal import Decimal
 
 def s_grid(n_int_grid):
     """
@@ -301,7 +302,7 @@ class MSTPP_RNN(object):
                 # cost for train batch and test batch
                 train_cost = sess.run(cost, feed_dict={self.input: batch_train})
                 test_cost  = sess.run(cost, feed_dict={self.input: batch_test})
-                print(train_cost, test_cost)
+                # print(train_cost, test_cost)
                 # record cost for each batch
                 avg_train_cost.append(train_cost)
                 avg_test_cost.append(test_cost)
@@ -310,8 +311,8 @@ class MSTPP_RNN(object):
             avg_train_cost = np.mean(avg_train_cost)
             avg_test_cost  = np.mean(avg_test_cost)
             print('[%s] Epoch %d (n_train_batches=%d, batch_size=%d)' % (arrow.now(), epoch, n_batches, batch_size), file=sys.stderr)
-            print('[%s] Train cost:\t%f' % (arrow.now(), avg_train_cost), file=sys.stderr)
-            print('[%s] Test cost:\t%f' % (arrow.now(), avg_test_cost), file=sys.stderr)
+            print('[%s] Train cost:\t%f' % (arrow.now(), '%.5E' % Decimal(avg_train_cost)), file=sys.stderr)
+            print('[%s] Test cost:\t%f' % (arrow.now(), '%.5E' % Decimal(avg_test_cost)), file=sys.stderr)
         
         # save all training cost into numpy file.
         np.savetxt("train_cost.txt", all_train_cost, delimiter=",")
@@ -333,7 +334,7 @@ if __name__ == "__main__":
         lstm_hidden_size = 7
         # training configurations
         step_size  = np.shape(data)[1]
-        batch_size = 5 
+        batch_size = 10
         test_ratio = 0.1
         epoches    = 10
         lr         = 1e-2
