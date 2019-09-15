@@ -262,7 +262,7 @@ class MSTPP_RNN(object):
         outputs, lams, states = self._recurrent_structure(batch_size, is_input=True)
         # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
         loglik = self._log_likelihood(outputs, lams, states)
-        cost   = -loglik
+        cost   = - tf.reduce_sum(loglik) / batch_size
         # Adam optimizer
         global_step   = tf.Variable(0, trainable=False)
         learning_rate = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
