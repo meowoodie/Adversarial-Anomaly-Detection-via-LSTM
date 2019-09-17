@@ -77,7 +77,7 @@ class MSTPP_RNN(object):
         """
         Args:
         """
-        INIT_PARAM_RATIO = 1 # 1e-2
+        INIT_PARAM_RATIO       = 1 # 1e-2
         # model hyper-parameters
         self.n_output          = 3
         self.lstm_hidden_size  = lstm_hidden_size # size of hidden states
@@ -200,11 +200,9 @@ class MSTPP_RNN(object):
         """
         evaluate the lambda value of each point in the specified spatio-temporal space given a sequences of points
         """
-        T      = outputs[:, :, 0]                                  # [batch_size, step_size]
-        C, H   = pack_lstm_states(states)                          # [step_size, batch_size, lstm_hidden_size]
-        # s_size = tf.constant(n_sgrid*n_sgrid, dtype=tf.int32)
+        T      = outputs[:, :, 0]                                # [batch_size, step_size]
+        C, H   = pack_lstm_states(states)                        # [step_size, batch_size, lstm_hidden_size]
         b_size, h_size = tf.shape(outputs)[0], tf.shape(H)[2]    # batch_size, lstm_hidden_size
-        
 
         # helper function: duplicate LSTM states for n_sgrid * n_sgrid
         def reshape_last_states(x):
@@ -218,7 +216,8 @@ class MSTPP_RNN(object):
             last_h = tf.reshape(                                 # [batch_size * n_sgrid * n_sgrid, lstm_hidden_size]
                 last_h, [b_size*n_sgrid*n_sgrid, lstm_hidden_size])
             return last_c, last_h
-            
+        
+        # prepare points (t, s) and states (lstm_states)
         t    = np.linspace(tlim[0], tlim[1], n_tgrid)            # np: [n_tgrid]
         s    = s_grid(n_sgrid)                                   # [n_sgrid * n_sgrid, 2]
         c, h = tf.scan(                                          # [n_tgrid, batch_size * n_sgrid * n_sgrid, lstm_hidden_size]
@@ -231,6 +230,7 @@ class MSTPP_RNN(object):
             tf.nn.rnn_cell.LSTMStateTuple(c=c[i], h=h[i]) 
             for i in range(len(t)) ]
 
+        # evaluate lambda for each point
         lam_eval = []                                            # (n_tgrid [batch_size * n_sgrid * n_sgrid, 1])
         for i in range(len(t)):                                  # for each temporal point
             _t  = tf.tile(tf.expand_dims(                        # [n_sgrid * n_sgrid, 1]
@@ -268,7 +268,7 @@ class MSTPP_RNN(object):
         # TODO: add marks term
 
         # calculate log-likelihood
-        loglik = loglik_1 + loglik_2
+        loglik = loglik_1 - loglik_2
         return loglik
 
     def _mle_optimizer(self, batch_size, n_tgrid, n_sgrid):
@@ -372,16 +372,8 @@ class MSTPP_RNN(object):
 
 if __name__ == "__main__":
     np.set_printoptions(suppress=True)
-    np.random.seed(1)
-    tf.set_random_seed(1)
-
-    # with tf.Session() as sess:
-    #     step_size  = 10
-    #     batch_size = 5 
-    #     lstm_hidden_size = 7
-        
-    #     pprnn = MSTPP_RNN(step_size, lstm_hidden_size)
-    #     pprnn.debug(sess)
+    # np.random.seed(1)
+    # tf.set_random_seed(1)
 
     with tf.Session() as sess:
         # data preparation
