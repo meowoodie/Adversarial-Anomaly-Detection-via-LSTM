@@ -9,6 +9,9 @@ import sys
 import arrow
 import numpy as np
 
+# 
+
+# Deprecated in the future
 class DataAdapter():
     """
     A helper class for normalizing and restoring data to the specific data range.

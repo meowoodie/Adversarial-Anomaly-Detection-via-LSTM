@@ -16,15 +16,15 @@ import numpy as np
 import tensorflow as tf
 from decimal import Decimal
 
-def s_grid(n_int_grid):
+def s_grid(n_sgrid):
     """
     helper function for generating the coordinations of the uniform grids in the spatial region [[-1, 1], [-1, 1]].
     """
-    x_bins = np.linspace(-1, 1, n_int_grid)
-    y_bins = np.linspace(-1, 1, n_int_grid)
+    x_bins = np.linspace(-1, 1, n_sgrid)
+    y_bins = np.linspace(-1, 1, n_sgrid)
     X, Y   = np.meshgrid(x_bins, y_bins)
     s      = np.concatenate([np.reshape(X, (-1,1)), np.reshape(Y, (-1,1))], axis=-1)
-    return s # [n_grid, 3] = [n_int_grid * n_int_grid, 3]
+    return tf.constant(s, dtype=tf.float32) # [n_grid, 2] = [n_grid * n_grid, 2]
 
 def pack_lstm_states(lstm_states):
     """
@@ -196,7 +196,56 @@ class MSTPP_RNN(object):
         lam = tf.exp(tf.linalg.matmul(next_lstm_state.h, self.W))
         return lam # [batch_size]
 
-    def _log_likelihood(self, outputs, lams, states, n_int_grid=10):
+    def _evaluate_lambda(self, outputs, states, tlim=[0, 1], n_tgrid=15, n_sgrid=15):
+        """
+        evaluate the lambda value of each point in the specified spatio-temporal space given a sequences of points
+        """
+        T      = outputs[:, :, 0]                                  # [batch_size, step_size]
+        C, H   = pack_lstm_states(states)                          # [step_size, batch_size, lstm_hidden_size]
+        # s_size = tf.constant(n_sgrid*n_sgrid, dtype=tf.int32)
+        b_size, h_size = tf.shape(outputs)[0], tf.shape(H)[2]    # batch_size, lstm_hidden_size
+        
+
+        # helper function: duplicate LSTM states for n_sgrid * n_sgrid
+        def reshape_last_states(x):
+            last_c, last_h = last_state_before_t(x, T, C, H)     # [batch_size, lstm_hidden_size]
+            last_c = tf.tile(tf.expand_dims(                     # [batch_size, n_sgrid * n_sgrid, lstm_hidden_size]
+                last_c, 1), [1, n_sgrid*n_sgrid, 1]) 
+            last_c = tf.reshape(                                 # [batch_size * n_sgrid * n_sgrid, lstm_hidden_size]
+                last_c, [b_size*n_sgrid*n_sgrid, lstm_hidden_size])
+            last_h = tf.tile(tf.expand_dims(                     # [batch_size, n_sgrid * n_sgrid, lstm_hidden_size]
+                last_h, 1), [1, n_sgrid*n_sgrid, 1]) 
+            last_h = tf.reshape(                                 # [batch_size * n_sgrid * n_sgrid, lstm_hidden_size]
+                last_h, [b_size*n_sgrid*n_sgrid, lstm_hidden_size])
+            return last_c, last_h
+            
+        t    = np.linspace(tlim[0], tlim[1], n_tgrid)            # np: [n_tgrid]
+        s    = s_grid(n_sgrid)                                   # [n_sgrid * n_sgrid, 2]
+        c, h = tf.scan(                                          # [n_tgrid, batch_size * n_sgrid * n_sgrid, lstm_hidden_size]
+            lambda a, x: reshape_last_states(x),
+            tf.constant(t, dtype=tf.float32), 
+            initializer=(
+                tf.zeros([b_size*n_sgrid*n_sgrid, h_size]), 
+                tf.zeros([b_size*n_sgrid*n_sgrid, h_size])))
+        lstm_states = [                                          # (n_tgrid [2, batch_size * n_sgrid * n_sgrid, lstm_hidden_size])
+            tf.nn.rnn_cell.LSTMStateTuple(c=c[i], h=h[i]) 
+            for i in range(len(t)) ]
+
+        lam_eval = []                                            # (n_tgrid [batch_size * n_sgrid * n_sgrid, 1])
+        for i in range(len(t)):                                  # for each temporal point
+            _t  = tf.tile(tf.expand_dims(                        # [n_sgrid * n_sgrid, 1]
+                tf.constant([t[i]], dtype=tf.float32), 0),
+                [n_sgrid*n_sgrid, 1])
+            ts  = tf.concat([_t, s], axis=1)                     # [n_sgrid * n_sgrid, 3]
+            ts  = tf.tile(tf.expand_dims(ts, 0), [b_size, 1, 1]) # [batch_size, n_sgrid * n_sgrid, 3]
+            ts  = tf.reshape(ts, [b_size*n_sgrid*n_sgrid, 3])    # [batch_size * n_sgrid * n_sgrid, 3]
+            lam = self._lambda(ts, lstm_states[i])               # [batch_size * n_sgrid * n_sgrid, 1]
+            lam_eval.append(lam)
+        lam_eval = tf.reshape(tf.stack(                          # [batch_size, n_tgrid, n_sgrid, n_sgrid, 1])
+            lam_eval, axis=0), [b_size, n_tgrid, n_sgrid, n_sgrid, 1])
+        return lam_eval                                          # (n_tgrid [batch_size * n_sgrid * n_sgrid, 1])
+
+    def _log_likelihood(self, outputs, lams, states, n_tgrid, n_sgrid):
         """
         log likelihood given history embedding `lstm_state` and current point `ts`
         """
@@ -204,70 +253,75 @@ class MSTPP_RNN(object):
         # - outputs (step_size [batch_size, n_output])
         # - lams    (step_size [batch_size, 1])
         # - states  (step_size [2, batch_size, lstm_hidden_size])
-        outputs = tf.stack(outputs, axis=1) # [batch_size, step_size, 3]
-        T       = outputs[:, :, 0]          # [batch_size, step_size]
-        C, H    = pack_lstm_states(states)  # [step_size, batch_size, lstm_hidden_size]
-        lams    = tf.stack(lams, axis=1)    # [batch_size, step_size, 1]
+        outputs  = tf.stack(outputs, axis=1) # [batch_size, step_size, 3]
+        lams     = tf.stack(lams, axis=1)    # [batch_size, step_size, 1]
 
         # first term: sum of log lambda given all the points 
-        loglik_1 = tf.reduce_sum(tf.log(lams), axis=1) # [batch_size, 1]
+        loglik_1 = tf.reduce_sum(tf.log(lams))
         
         # second term: integration of lambda over entire spatio-temporal space
-        b_size, h_size = tf.shape(outputs)[0], tf.shape(H)[2] # batch_size, lstm_hidden_size
-        t    = np.linspace(0, 1, n_int_grid)                  # np: [n_int_grid]
-        s    = s_grid(n_int_grid)                             # np: [n_int_grid * n_int_grid, 2]
-        c, h = tf.scan(                                       # [n_int_grid, batch_size, lstm_hidden_size]
-            lambda a, x: last_state_before_t(x, T, C, H), 
-            tf.constant(np.linspace(0, 1, n_int_grid), dtype=tf.float32), 
-            initializer=(tf.zeros([batch_size, h_size]), tf.zeros([batch_size, h_size])))
-        
-        intg = []
-        for sj in s:                 # for each spatial point
-            for i in range(len(t)):  # for each temporal point
-                ts    = tf.constant(np.concatenate([[t[i]], sj]), dtype=tf.float32) # [3]
-                ts    = tf.tile(tf.expand_dims(ts, 0), [b_size, 1])                 # [batch_size, 3]
-                state = tf.nn.rnn_cell.LSTMStateTuple(                              # [2, batch_size, lstm_hidden_size]
-                    c=c[i],                                                         # [batch_size, lstm_hidden_size]
-                    h=h[i])                                                         # [batch_size, lstm_hidden_size]
-                lam   = self._lambda(ts, state)                                     # [batch_size, 1]
-                intg.append(lam)
-        loglik_2 = tf.reduce_sum(tf.stack(intg, axis=1), axis=1)                    # [batch_size, 1]
+        lam_eval = self._evaluate_lambda(outputs, states, tlim=[0, 1], n_tgrid=n_tgrid, n_sgrid=n_sgrid) 
+        loglik_2 = tf.reduce_sum(lam_eval) * \
+            tf.constant((1. / n_tgrid) * (2. / n_sgrid) * (2. / n_sgrid), dtype=tf.float32) 
 
         # third term: sum of log pdf of marks
         # TODO: add marks term
 
         # calculate log-likelihood
         loglik = loglik_1 + loglik_2
-        return loglik # [batch_size, 1]
+        return loglik
 
-    def train_gan(self, sess, batch_size):
+    def _mle_optimizer(self, batch_size, n_tgrid, n_sgrid):
         """
+        MLE Optimizer
         """
-        # define network structure
-        outputs, lams, states = self._recurrent_structure(batch_size)
-        loglik = self._log_likelihood(outputs, lams, states)
-        # initialize variables
-        init_op = tf.global_variables_initializer()
-        sess.run(init_op)
-        
-        print(sess.run(loglik))
+        # define network structure with external input
+        outputs, lams, states = self._recurrent_structure(batch_size, is_input=True)
+        # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
+        loglik         = self._log_likelihood(outputs, lams, states, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
+        self.cost      = - loglik
+        # Adam optimizer
+        global_step    = tf.Variable(0, trainable=False)
+        learning_rate  = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
+        self.optimizer = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(self.cost, global_step=global_step)
 
-    def train_mle(self, sess, batch_size, 
+    # def _gan_optimizer(self, batch_size):
+    #     """
+    #     GAN Optimizer
+    #     """
+    #     # define network structure with internal sampling
+    #     outputs, lams, states = self._recurrent_structure(batch_size, is_input=False)
+    #     # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
+    #     loglik         = self._log_likelihood(outputs, lams, states, n_grid=50)
+    #     self.cost      = - tf.reduce_sum(loglik) / batch_size
+    #     # Adam optimizer
+    #     global_step    = tf.Variable(0, trainable=False)
+    #     learning_rate  = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
+    #     self.optimizer = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(self.cost, global_step=global_step)
+
+    # def debug(self, sess):
+    #     # define network structure with external input
+    #     outputs, lams, states = self._recurrent_structure(batch_size=5, is_input=False)
+    #     res = self._log_likelihood(outputs, lams, states, n_tgrid=15, n_sgrid=15)
+
+    #     # initialize variables
+    #     init_op = tf.global_variables_initializer()
+    #     sess.run(init_op)
+
+    #     print(sess.run(res))
+
+    def train(self, sess, batch_size, 
             data,       # external input for the LSTM [n_data, step_size, n_output]
             test_ratio, # fraction of data only for test
+            n_tgrid=20, # number of grid in time 
+            n_sgrid=20, # number of grid in space
             epoches=10, # number of epoches (how many times is the entire dataset going to be trained)
             lr=1e-2):   # learning rate
         """
+        Training
         """
-        # define network structure
-        outputs, lams, states = self._recurrent_structure(batch_size, is_input=True)
-        # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
-        loglik = self._log_likelihood(outputs, lams, states)
-        cost   = - tf.reduce_sum(loglik) / batch_size
-        # Adam optimizer
-        global_step   = tf.Variable(0, trainable=False)
-        learning_rate = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
-        optimizer     = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(cost, global_step=global_step)
+        # define optimizer
+        self._mle_optimizer(batch_size, n_tgrid, n_sgrid)
         # initialize variables
         init_op = tf.global_variables_initializer()
         sess.run(init_op)
@@ -298,10 +352,10 @@ class MSTPP_RNN(object):
                 batch_train = data[batch_train_ids, :, :]
                 batch_test  = data[batch_test_ids, :, :]
                 # optimization procedure
-                sess.run(optimizer, feed_dict={self.input: batch_train})
+                sess.run(self.optimizer, feed_dict={self.input: batch_train})
                 # cost for train batch and test batch
-                train_cost = sess.run(cost, feed_dict={self.input: batch_train})
-                test_cost  = sess.run(cost, feed_dict={self.input: batch_test})
+                train_cost = sess.run(self.cost, feed_dict={self.input: batch_train})
+                test_cost  = sess.run(self.cost, feed_dict={self.input: batch_test})
                 # print(train_cost, test_cost)
                 # record cost for each batch
                 avg_train_cost.append(train_cost)
@@ -311,17 +365,23 @@ class MSTPP_RNN(object):
             avg_train_cost = np.mean(avg_train_cost)
             avg_test_cost  = np.mean(avg_test_cost)
             print('[%s] Epoch %d (n_train_batches=%d, batch_size=%d)' % (arrow.now(), epoch, n_batches, batch_size), file=sys.stderr)
-            print('[%s] Train cost:\t%f' % (arrow.now(), '%.5E' % Decimal(avg_train_cost)), file=sys.stderr)
-            print('[%s] Test cost:\t%f' % (arrow.now(), '%.5E' % Decimal(avg_test_cost)), file=sys.stderr)
-        
-        # save all training cost into numpy file.
-        np.savetxt("train_cost.txt", all_train_cost, delimiter=",")
+            print('[%s] Train cost:\t%f' % (arrow.now(), avg_train_cost), file=sys.stderr)
+            print('[%s] Test cost:\t%f' % (arrow.now(), avg_test_cost), file=sys.stderr)
 
         
 
 if __name__ == "__main__":
-    # np.random.seed(1)
-    # tf.set_random_seed(1)
+    np.set_printoptions(suppress=True)
+    np.random.seed(1)
+    tf.set_random_seed(1)
+
+    # with tf.Session() as sess:
+    #     step_size  = 10
+    #     batch_size = 5 
+    #     lstm_hidden_size = 7
+        
+    #     pprnn = MSTPP_RNN(step_size, lstm_hidden_size)
+    #     pprnn.debug(sess)
 
     with tf.Session() as sess:
         # data preparation
@@ -334,11 +394,13 @@ if __name__ == "__main__":
         lstm_hidden_size = 7
         # training configurations
         step_size  = np.shape(data)[1]
-        batch_size = 10
-        test_ratio = 0.1
-        epoches    = 10
-        lr         = 1e-2
+        batch_size = 20
+        test_ratio = 0.3
+        epoches    = 100
+        lr         = 1e-1
+        n_tgrid    = 20
+        n_sgrid    = 20
         # define MSTPP_RNN
         pprnn = MSTPP_RNN(step_size, lstm_hidden_size)
         # train via mle
-        pprnn.train_mle(sess, batch_size, data, test_ratio, epoches, lr)
+        pprnn.train(sess, batch_size, data, test_ratio, n_tgrid, n_sgrid, epoches, lr)
