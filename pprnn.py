@@ -14,7 +14,9 @@ import arrow
 import utils
 import numpy as np
 import tensorflow as tf
-from decimal import Decimal
+
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 def s_grid(n_sgrid):
     """
@@ -243,7 +245,7 @@ class MSTPP_RNN(object):
             lam_eval.append(lam)
         lam_eval = tf.reshape(tf.stack(                          # [batch_size, n_tgrid, n_sgrid, n_sgrid, 1])
             lam_eval, axis=0), [b_size, n_tgrid, n_sgrid, n_sgrid, 1])
-        return lam_eval                                          # (n_tgrid [batch_size * n_sgrid * n_sgrid, 1])
+        return lam_eval                                          # [batch_size, n_tgrid, n_sgrid, n_sgrid, 1]
 
     def _log_likelihood(self, outputs, lams, states, n_tgrid, n_sgrid):
         """
@@ -284,6 +286,24 @@ class MSTPP_RNN(object):
         global_step    = tf.Variable(0, trainable=False)
         learning_rate  = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
         self.optimizer = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(self.cost, global_step=global_step)
+
+    # def visualize_lambda(self, sess, batch_size, data, ind=0, tlim=[0, 1], n_tgrid=20, n_sgrid=20):
+    #     """
+    #     Visualize conditional intensity (Lambda) in spatio-temporal space as an animation 
+    #     given a single trajectory `data` [1, step_size, output_size].
+    #     """
+    #     # define network structure with external input
+    #     outputs, lams, states = self._recurrent_structure(batch_size, is_input=True)
+    #     outputs  = tf.stack(outputs, axis=1) # [batch_size, step_size, 3]
+    #     lam_eval = self._evaluate_lambda(outputs, states, tlim=[0., 1.], n_tgrid=n_tgrid, n_sgrid=n_sgrid) 
+    #     lam_eval = tf.squeeze(lam_eval)      # [batch_size, n_tgrid, n_sgrid, n_sgrid]
+
+    #     init_op = tf.global_variables_initializer()
+    #     sess.run(init_op)
+
+    #     _lam_eval = sess.run(lam_eval, feed_dict={self.input: data})
+    #     print(np.shape(_lam_eval))
+    #     utils.plot_spatial_intensity(_lam_eval[0], interval=50)
 
     # def _gan_optimizer(self, batch_size):
     #     """
@@ -380,19 +400,22 @@ if __name__ == "__main__":
         data       = np.load("data/northcal.earthquake.perseason.npy")
         da         = utils.DataAdapter(init_data=data, S=[[-1., 1.], [-1., 1.]], T=[0., 1.])
         data       = da.normalize(data)[:, 1:21, :]
-        print(data)
-        print(data.shape)
+        # print(data)
+        # print(data.shape)
+
         # model configurations
         lstm_hidden_size = 7
         # training configurations
         step_size  = np.shape(data)[1]
         batch_size = 20
         test_ratio = 0.3
-        epoches    = 100
+        epoches    = 20
         lr         = 1e-1
         n_tgrid    = 20
         n_sgrid    = 20
+
         # define MSTPP_RNN
         pprnn = MSTPP_RNN(step_size, lstm_hidden_size)
         # train via mle
         pprnn.train(sess, batch_size, data, test_ratio, n_tgrid, n_sgrid, epoches, lr)
+        pprnn.visualize_lambda(sess, batch_size, data[:20, :, :])
