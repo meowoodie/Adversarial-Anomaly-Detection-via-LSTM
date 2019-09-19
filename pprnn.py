@@ -278,32 +278,30 @@ class MSTPP_RNN(object):
         MLE Optimizer
         """
         # define network structure with external input
-        outputs, lams, states = self._recurrent_structure(batch_size, is_input=True)
+        self.outputs, self.lams, self.states = self._recurrent_structure(batch_size, is_input=True)
         # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
-        loglik         = self._log_likelihood(outputs, lams, states, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
+        loglik         = self._log_likelihood(self.outputs, self.lams, self.states, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
         self.cost      = - loglik
         # Adam optimizer
         global_step    = tf.Variable(0, trainable=False)
         learning_rate  = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
         self.optimizer = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(self.cost, global_step=global_step)
 
-    # def visualize_lambda(self, sess, batch_size, data, ind=0, tlim=[0, 1], n_tgrid=20, n_sgrid=20):
-    #     """
-    #     Visualize conditional intensity (Lambda) in spatio-temporal space as an animation 
-    #     given a single trajectory `data` [1, step_size, output_size].
-    #     """
-    #     # define network structure with external input
-    #     outputs, lams, states = self._recurrent_structure(batch_size, is_input=True)
-    #     outputs  = tf.stack(outputs, axis=1) # [batch_size, step_size, 3]
-    #     lam_eval = self._evaluate_lambda(outputs, states, tlim=[0., 1.], n_tgrid=n_tgrid, n_sgrid=n_sgrid) 
-    #     lam_eval = tf.squeeze(lam_eval)      # [batch_size, n_tgrid, n_sgrid, n_sgrid]
+    def visualize_lambda(self, sess, batch_size, data, ind=0, tlim=[0, 1], n_tgrid=1000, n_sgrid=20):
+        """
+        Visualize conditional intensity (Lambda) in spatio-temporal space as an animation 
+        given a single trajectory `data` [1, step_size, output_size].
+        """
+        outputs  = tf.stack(self.outputs, axis=1) # [batch_size, step_size, 3]
+        lam_eval = self._evaluate_lambda(outputs, self.states, tlim=[0., 1.], n_tgrid=n_tgrid, n_sgrid=n_sgrid) 
+        lam_eval = tf.squeeze(lam_eval)           # [batch_size, n_tgrid, n_sgrid, n_sgrid]
 
-    #     init_op = tf.global_variables_initializer()
-    #     sess.run(init_op)
+        init_op = tf.global_variables_initializer()
+        sess.run(init_op)
 
-    #     _lam_eval = sess.run(lam_eval, feed_dict={self.input: data})
-    #     print(np.shape(_lam_eval))
-    #     utils.plot_spatial_intensity(_lam_eval[0], interval=50)
+        _lam_eval = sess.run(lam_eval, feed_dict={self.input: data})
+        print(np.shape(_lam_eval))
+        utils.plot_spatial_intensity(_lam_eval[0], interval=50)
 
     # def _gan_optimizer(self, batch_size):
     #     """
