@@ -52,7 +52,7 @@ def last_state_before_t(t, T, C, H):
 
     # append a zero state at the begining of the points for each batch
     # NOTE: for t < t_0, a zero state is applied here.
-    init_states = tf.zeros([1, batch_size, lstm_hidden_size])
+    init_states = tf.zeros([1, b_size, h_size])
     C           = tf.concat([init_states, C], axis=0)
     H           = tf.concat([init_states, H], axis=0)
 
@@ -75,7 +75,7 @@ class MSTPP_RNN(object):
     Recurrent Neural Networks for Marked Spatio-Temporal Point Processes
     """
 
-    def __init__(self, step_size, lstm_hidden_size):
+    def __init__(self, step_size, lstm_hidden_size, external_tensor_input=None):
         """
         Args:
         """
@@ -92,10 +92,13 @@ class MSTPP_RNN(object):
         self.W2 = tf.get_variable(name="W2", initializer=INIT_PARAM_RATIO * tf.random_normal([5, 1]))
         self.b2 = tf.get_variable(name="b2", initializer=INIT_PARAM_RATIO * tf.random_normal([1]))
 
-    def _recurrent_structure(self, batch_size, is_input=False):
+        # define input variable if external_tensor_input is None [batch_size, step_size, n_output]
+        self.input = external_tensor_input \
+            if external_tensor_input is not None \
+            else tf.placeholder(tf.float32, [None, self.step_size, self.n_output])
+
+    def create_recurrent_structure(self, batch_size, is_input=False):
         """Recurrent structure with customized LSTM cells"""
-        # define input variable if is_input is True [batch_size, step_size, n_output]
-        self.input      = tf.placeholder(tf.float32, [batch_size, self.step_size, self.n_output]) 
         # LSTM structure initialization
         # - create a basic LSTM cell
         self.lstm_cell  = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_hidden_size)
@@ -218,11 +221,11 @@ class MSTPP_RNN(object):
             last_c = tf.tile(tf.expand_dims(                     # [batch_size, n_sgrid * n_sgrid, lstm_hidden_size]
                 last_c, 1), [1, n_sgrid*n_sgrid, 1]) 
             last_c = tf.reshape(                                 # [batch_size * n_sgrid * n_sgrid, lstm_hidden_size]
-                last_c, [b_size*n_sgrid*n_sgrid, lstm_hidden_size])
+                last_c, [b_size*n_sgrid*n_sgrid, h_size])
             last_h = tf.tile(tf.expand_dims(                     # [batch_size, n_sgrid * n_sgrid, lstm_hidden_size]
                 last_h, 1), [1, n_sgrid*n_sgrid, 1]) 
             last_h = tf.reshape(                                 # [batch_size * n_sgrid * n_sgrid, lstm_hidden_size]
-                last_h, [b_size*n_sgrid*n_sgrid, lstm_hidden_size])
+                last_h, [b_size*n_sgrid*n_sgrid, h_size])
             return last_c, last_h
         
         # prepare points (t, s) and states (lstm_states)
@@ -253,7 +256,7 @@ class MSTPP_RNN(object):
             lam_eval, axis=0), [b_size, n_tgrid, n_sgrid, n_sgrid, 1])
         return lam_eval                                          # [batch_size, n_tgrid, n_sgrid, n_sgrid, 1]
 
-    def _log_likelihood(self, outputs, lams, states, n_tgrid, n_sgrid):
+    def log_likelihood(self, outputs, lams, states, n_tgrid, n_sgrid):
         """
         log likelihood given history embedding `lstm_state` and current point `ts`
         """
@@ -279,77 +282,19 @@ class MSTPP_RNN(object):
         loglik = loglik_1 - loglik_2
         return loglik # [batch_size, 1]
 
-    def _mle_optimizer(self, batch_size, n_tgrid, n_sgrid):
+    def mle_optimizer(self, batch_size, n_tgrid, n_sgrid):
         """
         MLE Optimizer
         """
         # define network structure with external input
-        self.outputs, self.lams, self.states = self._recurrent_structure(batch_size, is_input=True)
+        self.outputs, self.lams, self.states = self.create_recurrent_structure(batch_size, is_input=True)
         # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
-        loglik         = self._log_likelihood(self.outputs, self.lams, self.states, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
+        loglik         = self.log_likelihood(self.outputs, self.lams, self.states, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
         self.cost      = - tf.reduce_sum(loglik) / batch_size
         # Adam optimizer
         global_step    = tf.Variable(0, trainable=False)
         learning_rate  = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
         self.optimizer = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(self.cost, global_step=global_step)
-
-    # def _gan_optimizer(self, batch_size, n_tgrid, n_sgrid):
-    #     """
-    #     GAN Optimizer
-    #     """
-    #     with tf.variable_scope("fake"): # generate fake abnormal data 
-    #         # 1. define generator network with internal sampling
-    #         self.fake_out, self.fake_lams, self.fake_states = self._recurrent_structure(batch_size, is_input=False)
-    #     with tf.variable_scope("data"): # take empirical abnormal data as input
-    #         # 2. define empirical data network with external input
-    #         self.data_out, self.data_lams, self.data_states = self._recurrent_structure(batch_size, is_input=True)
-
-    #     # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
-    #     fake_loglik = self._log_likelihood(self.fake_out, self.fake_lams, self.fake_states, n_tgrid=n_tgrid, n_sgrid=n_sgrid) # [batch_size, 1]
-    #     data_loglik = self._log_likelihood(self.data_out, self.data_lams, self.data_states, n_tgrid=n_tgrid, n_sgrid=n_sgrid) # [batch_size, 1]
-
-    #     # # likelihood ratio
-    #     # Dx  = dloglik - gloglik
-    #     # DGz = 
-            
-    #     # Descriminator
-    #     print(self.)
-
-
-    #     # self.cost      = ratio
-    #     # # Adam optimizer
-    #     # global_step    = tf.Variable(0, trainable=False)
-    #     # learning_rate  = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
-    #     # self.optimizer = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(self.cost, global_step=global_step)
-
-    def visualize_lambda(self, sess, batch_size, data, ind=0, tlim=[0, 1], n_tgrid=1000, n_sgrid=20):
-        """
-        Visualize conditional intensity (Lambda) in spatio-temporal space as an animation
-        given a single trajectory `data` [1, step_size, output_size].
-        """
-        print(n_tgrid, n_sgrid)
-        outputs  = tf.stack(self.outputs, axis=1) # [batch_size, step_size, 3]
-        lam_eval = self._evaluate_lambda(outputs, self.states, tlim=[0., 1.], n_tgrid=n_tgrid, n_sgrid=n_sgrid) 
-        lam_eval = tf.squeeze(lam_eval)           # [batch_size, n_tgrid, n_sgrid, n_sgrid]
-
-        init_op = tf.global_variables_initializer()
-        sess.run(init_op)
-
-        _lam_eval = sess.run(lam_eval, feed_dict={self.input: data})
-        print(np.shape(_lam_eval))
-        utils.plot_spatial_intensity(_lam_eval[0], interval=50)
-
-    def debug(self, sess):
-        # # define network structure with external input
-        # outputs, lams, states = self._recurrent_structure(batch_size=5, is_input=False)
-        # res = self._log_likelihood(outputs, lams, states, n_tgrid=15, n_sgrid=15)
-        self._gan_optimizer(batch_size=5, n_tgrid=15, n_sgrid=15)
-
-        # initialize variables
-        init_op = tf.global_variables_initializer()
-        sess.run(init_op)
-
-        # print(sess.run(res))
 
     def train(self, sess, batch_size, 
             data,       # external input for the LSTM [n_data, step_size, n_output]
@@ -362,7 +307,7 @@ class MSTPP_RNN(object):
         Training
         """
         # define optimizer
-        self._gan_optimizer(batch_size, n_tgrid, n_sgrid)
+        self.mle_optimizer(batch_size, n_tgrid, n_sgrid)
         # initialize variables
         init_op = tf.global_variables_initializer()
         sess.run(init_op)
@@ -408,13 +353,30 @@ class MSTPP_RNN(object):
             print('[%s] Epoch %d (n_train_batches=%d, batch_size=%d)' % (arrow.now(), epoch, n_batches, batch_size), file=sys.stderr)
             print('[%s] Train cost:\t%f' % (arrow.now(), avg_train_cost), file=sys.stderr)
             print('[%s] Test cost:\t%f' % (arrow.now(), avg_test_cost), file=sys.stderr)
+    
+    # def visualize_lambda(self, sess, batch_size, data, ind=0, tlim=[0, 1], n_tgrid=1000, n_sgrid=20):
+    #     """
+    #     Visualize conditional intensity (Lambda) in spatio-temporal space as an animation
+    #     given a single trajectory `data` [1, step_size, output_size].
+    #     """
+    #     print(n_tgrid, n_sgrid)
+    #     outputs  = tf.stack(self.outputs, axis=1) # [batch_size, step_size, 3]
+    #     lam_eval = self._evaluate_lambda(outputs, self.states, tlim=[0., 1.], n_tgrid=n_tgrid, n_sgrid=n_sgrid) 
+    #     lam_eval = tf.squeeze(lam_eval)           # [batch_size, n_tgrid, n_sgrid, n_sgrid]
+
+    #     init_op = tf.global_variables_initializer()
+    #     sess.run(init_op)
+
+    #     _lam_eval = sess.run(lam_eval, feed_dict={self.input: data})
+    #     print(np.shape(_lam_eval))
+    #     utils.plot_spatial_intensity(_lam_eval[0], interval=50)
 
         
 
 if __name__ == "__main__":
     np.set_printoptions(suppress=True)
-    np.random.seed(1)
-    tf.set_random_seed(1)
+    # np.random.seed(1)
+    # tf.set_random_seed(1)
 
     with tf.Session() as sess:
         # data preparation
@@ -439,7 +401,7 @@ if __name__ == "__main__":
 
         # define MSTPP_RNN
         pprnn = MSTPP_RNN(step_size, lstm_hidden_size)
-        pprnn.debug(sess)
-        # # train via mle
-        # pprnn.train(sess, batch_size, data, test_ratio, n_tgrid, n_sgrid, epoches, lr)
+        # pprnn.debug(sess)
+        # train via mle
+        pprnn.train(sess, batch_size, data, test_ratio, n_tgrid, n_sgrid, epoches, lr)
         # pprnn.visualize_lambda(sess, batch_size, data[:20, :, :], tlim=[0, .025], n_tgrid=1000, n_sgrid=20)
