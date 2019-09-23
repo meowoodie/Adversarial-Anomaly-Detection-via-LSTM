@@ -47,6 +47,7 @@ def plot_spatial_intensity(lam_eval, interval):
     def animate(i):
         # print(t_span[i])
         im.set_data(lam_eval[i, :, :])
+        print(i)
         return im,
     # function for initiating the first image of the animation
     def init():
