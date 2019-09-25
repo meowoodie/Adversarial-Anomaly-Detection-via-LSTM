@@ -87,25 +87,24 @@ class MSTPP_RNN(object):
         self.mu                = 0
 
         # define model weights
-        self.W1 = tf.get_variable(name="W1", initializer=INIT_PARAM_RATIO * tf.random_normal([self.lstm_hidden_size, 5]))
-        self.b1 = tf.get_variable(name="b1", initializer=INIT_PARAM_RATIO * tf.random_normal([5]))
-        self.W2 = tf.get_variable(name="W2", initializer=INIT_PARAM_RATIO * tf.random_normal([5, 1]))
-        self.b2 = tf.get_variable(name="b2", initializer=INIT_PARAM_RATIO * tf.random_normal([1]))
+        self.W0 = tf.get_variable(name="W0", initializer=INIT_PARAM_RATIO * tf.random_normal([self.lstm_hidden_size, 1]))
+        self.b0 = tf.get_variable(name="b0", initializer=INIT_PARAM_RATIO * tf.random_normal([1]))
 
-        # define input variable if external_tensor_input is None [batch_size, step_size, n_output]
-        self.input = external_tensor_input \
-            if external_tensor_input is not None \
-            else tf.placeholder(tf.float32, [None, self.step_size, self.n_output])
-
-    def create_recurrent_structure(self, batch_size, is_input=False):
-        """Recurrent structure with customized LSTM cells"""
-        # LSTM structure initialization
+        self.W1 = tf.get_variable(name="W1", initializer=INIT_PARAM_RATIO * tf.random_normal([self.lstm_hidden_size, self.n_output]))
+        self.b1 = tf.get_variable(name="b1", initializer=INIT_PARAM_RATIO * tf.random_normal([self.n_output]))
+        
         # - create a basic LSTM cell
         self.lstm_cell  = tf.nn.rnn_cell.BasicLSTMCell(self.lstm_hidden_size)
+
+    def create_recurrent_structure(self, batch_size, lstm_input=None):
+        """Recurrent structure with customized LSTM cells"""
+        # LSTM structure initialization
         # - define initial basic LSTM hidden state [2, batch_size, lstm_hidden_size]
         #   * lstm_state.h: hidden state [batch_size, lstm_hidden_size]
         #   * lstm_state.c: cell state   [batch_size, lstm_hidden_size]
-        init_lstm_state = self.lstm_cell.zero_state(batch_size, dtype=tf.float32)
+        init_lstm_state = tf.nn.rnn_cell.LSTMStateTuple(
+            c=tf.random_normal([batch_size, self.lstm_hidden_size]), 
+            h=tf.random_normal([batch_size, self.lstm_hidden_size])) # self.lstm_cell.zero_state(batch_size, dtype=tf.float32)
         # - init_t: initial output [batch_size, 1]
         init_t          = tf.zeros([batch_size], dtype=tf.float32)
         
@@ -116,7 +115,7 @@ class MSTPP_RNN(object):
         # concatenate each customized LSTM cell iteratively
         for i in range(self.step_size):
             # use external input if is_input is true
-            _input = self.input[:, i, :] if is_input is True else None
+            _input = lstm_input[:, i, :] if lstm_input is not None else None
             # one step in LSTM
             output, lam, lstm_state = self._customized_lstm_cell(batch_size, last_lstm_state, last_t, _input)
             # record outputs and states history
@@ -160,36 +159,41 @@ class MSTPP_RNN(object):
         Given the last hidden state of the RNN, the function samples a single output (time and space) using 
         thinning algorithm based on the intensity function which is defined by the hidden state. 
         """
-        # thinning one spatio-temporal sample for each batch
-        ts  = [] # [batch_size, 3]
-        lam = [] # [batch_size, 1] 
-        for b in range(batch_size):
-            # generate random spatio-temporal points in space ([0, 1], [0, 1], [0, 1])
-            cand_t   = tf.random.uniform(shape=[n_sample, 1], minval=last_t[b], maxval=1, dtype=tf.float32)
-            cand_t   = tf.contrib.framework.sort(cand_t, axis=0) # sort the random points in chronological order
-            cand_s   = tf.random.uniform(shape=[n_sample, 2], minval=-1, maxval=1, dtype=tf.float32)
-            cand_ts  = tf.concat([cand_t, cand_s], axis=1)
-            # generate acceptence rate matrix [batch_size, n_sample]
-            accept   = tf.random.uniform(shape=[n_sample, 1], minval=0, maxval=1, dtype=tf.float32)
-            # calculate lambda for each sample
-            state    = tf.nn.rnn_cell.LSTMStateTuple(
-                c=tf.tile(tf.expand_dims(lstm_state.c[b, :], 0), [n_sample, 1]),       # [n_sample, lstm_hidden_size]
-                h=tf.tile(tf.expand_dims(lstm_state.h[b, :], 0), [n_sample, 1]))       # [n_sample, lstm_hidden_size]
-            cand_lam = self._lambda(cand_ts, state)                                    # [n_sample, 1]
-            # reject samples
-            mask     = tf.squeeze(tf.cast(accept * upperb > cand_lam, dtype=tf.int32)) # [n_sample]
-            # get first non-zero sample
-            # NOTE: 
-            # the shape of return tensor of tf.gather cannot be inferred, which will lead to a ValueError
-            # (Cannot iterate over a shape with unknown rank). Because, function tf.nn.rnn_cell.BasicLSTMCell,
-            # requires the shape of inputs should be inferred via shape inference, as shown in
-            # https://www.tensorflow.org/api_docs/python/tf/nn/static_rnn
-            b_ts  = tf.gather_nd(cand_ts, tf.where(tf.not_equal(mask, 0)))[0]
-            b_lam = tf.gather_nd(cand_lam, tf.where(tf.not_equal(mask, 0)))[0]
-            ts.append(b_ts)
-            lam.append(b_lam)
-        ts  = tf.stack(ts)
-        lam = tf.stack(lam) 
+        # # thinning one spatio-temporal sample for each batch
+        # ts  = [] # [batch_size, 3]
+        # lam = [] # [batch_size, 1] 
+        # for b in range(batch_size):
+        #     # generate random spatio-temporal points in space ([0, 1], [0, 1], [0, 1])
+        #     cand_t   = tf.random.uniform(shape=[n_sample, 1], minval=last_t[b], maxval=1, dtype=tf.float32)
+        #     cand_t   = tf.contrib.framework.sort(cand_t, axis=0) # sort the random points in chronological order
+        #     cand_s   = tf.random.uniform(shape=[n_sample, 2], minval=-1, maxval=1, dtype=tf.float32)
+        #     cand_ts  = tf.concat([cand_t, cand_s], axis=1)
+        #     # generate acceptence rate matrix [batch_size, n_sample]
+        #     accept   = tf.random.uniform(shape=[n_sample, 1], minval=0, maxval=1, dtype=tf.float32)
+        #     # calculate lambda for each sample
+        #     state    = tf.nn.rnn_cell.LSTMStateTuple(
+        #         c=tf.tile(tf.expand_dims(lstm_state.c[b, :], 0), [n_sample, 1]),       # [n_sample, lstm_hidden_size]
+        #         h=tf.tile(tf.expand_dims(lstm_state.h[b, :], 0), [n_sample, 1]))       # [n_sample, lstm_hidden_size]
+        #     cand_lam = self._lambda(cand_ts, state)                                    # [n_sample, 1]
+        #     # reject samples
+        #     mask     = tf.squeeze(tf.cast(accept * upperb > cand_lam, dtype=tf.int32)) # [n_sample]
+        #     # get first non-zero sample
+        #     # NOTE: 
+        #     # the shape of return tensor of tf.gather cannot be inferred, which will lead to a ValueError
+        #     # (Cannot iterate over a shape with unknown rank). Because, function tf.nn.rnn_cell.BasicLSTMCell,
+        #     # requires the shape of inputs should be inferred via shape inference, as shown in
+        #     # https://www.tensorflow.org/api_docs/python/tf/nn/static_rnn
+        #     b_ts  = tf.gather_nd(cand_ts, tf.where(tf.not_equal(mask, 0)))[0]
+        #     b_lam = tf.gather_nd(cand_lam, tf.where(tf.not_equal(mask, 0)))[0]
+        #     ts.append(b_ts)
+        #     lam.append(b_lam)
+        # ts  = tf.stack(ts)
+        # lam = tf.stack(lam) 
+        dts = tf.exp(tf.linalg.matmul(lstm_state.h, self.W1) + self.b1) # [batch_size, 3]
+        t   = tf.expand_dims(dts[:, 0] + last_t, 1)
+        s   = dts[:, 1:]
+        ts  = tf.concat([t, s], axis=1)
+        lam = self._lambda(ts, lstm_state)
         return ts, lam
 
     def _lambda(self, ts, last_lstm_state):
@@ -201,11 +205,8 @@ class MSTPP_RNN(object):
         # calculate the hidden state for the next moment (the information of current point will be embedded into hidden state)
         _, next_lstm_state = tf.nn.static_rnn(self.lstm_cell, [ts], initial_state=last_lstm_state, dtype=tf.float32)
         # calculate the lambda for the current moment
-        # lam = tf.nn.relu(tf.linalg.matmul(next_lstm_state.h, self.W) + self.b)
-        lam = tf.exp(tf.linalg.matmul(
-            tf.exp(tf.linalg.matmul(next_lstm_state.h, self.W1) + self.b1), 
-            self.W2) + self.b2)
-        return lam # [batch_size]
+        lam = tf.exp(tf.linalg.matmul(next_lstm_state.h, self.W0) + self.b0)
+        return lam      # [batch_size]
 
     def _evaluate_lambda(self, outputs, states, tlim=[0, 1], n_tgrid=15, n_sgrid=15):
         """
@@ -286,15 +287,17 @@ class MSTPP_RNN(object):
         """
         MLE Optimizer
         """
+        # define input variable if external_tensor_input is None [batch_size, step_size, n_output]
+        self.lstm_input = tf.placeholder(tf.float32, [None, self.step_size, self.n_output])
         # define network structure with external input
-        self.outputs, self.lams, self.states = self.create_recurrent_structure(batch_size, is_input=True)
+        self.outputs, self.lams, self.states = self.create_recurrent_structure(batch_size, self.lstm_input)
         # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
-        loglik         = self.log_likelihood(self.outputs, self.lams, self.states, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
-        self.cost      = - tf.reduce_sum(loglik) / batch_size
+        loglik          = self.log_likelihood(self.outputs, self.lams, self.states, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
+        self.cost       = - tf.reduce_mean(loglik)
         # Adam optimizer
-        global_step    = tf.Variable(0, trainable=False)
-        learning_rate  = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
-        self.optimizer = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(self.cost, global_step=global_step)
+        global_step     = tf.Variable(0, trainable=False)
+        learning_rate   = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
+        self.optimizer  = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(self.cost, global_step=global_step)
 
     def train(self, sess, batch_size, 
             data,       # external input for the LSTM [n_data, step_size, n_output]
@@ -338,10 +341,10 @@ class MSTPP_RNN(object):
                 batch_train = data[batch_train_ids, :, :]
                 batch_test  = data[batch_test_ids, :, :]
                 # optimization procedure
-                sess.run(self.optimizer, feed_dict={self.input: batch_train})
+                sess.run(self.optimizer, feed_dict={self.lstm_input: batch_train})
                 # cost for train batch and test batch
-                train_cost = sess.run(self.cost, feed_dict={self.input: batch_train})
-                test_cost  = sess.run(self.cost, feed_dict={self.input: batch_test})
+                train_cost = sess.run(self.cost, feed_dict={self.lstm_input: batch_train})
+                test_cost  = sess.run(self.cost, feed_dict={self.lstm_input: batch_test})
                 # print(train_cost, test_cost)
                 # record cost for each batch
                 avg_train_cost.append(train_cost)
