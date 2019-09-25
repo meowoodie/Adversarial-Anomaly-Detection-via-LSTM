@@ -159,6 +159,7 @@ class MSTPP_RNN(object):
         Given the last hidden state of the RNN, the function samples a single output (time and space) using 
         thinning algorithm based on the intensity function which is defined by the hidden state. 
         """
+        # DEPRECATED: NO GRADIENTS FOR TRAINABLE VARIABLES
         # # thinning one spatio-temporal sample for each batch
         # ts  = [] # [batch_size, 3]
         # lam = [] # [batch_size, 1] 

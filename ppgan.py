@@ -66,8 +66,8 @@ class PPGAN(object):
         disc_real = self._discriminator(encode_real_h[-1, :, :])     # [batch_size, 1]
         disc_fake = self._discriminator(encode_fake_h[-1, :, :])     # [batch_size, 1]
 
-        self.debug1 = disc_real
-        self.debug2 = disc_fake
+        self.dr = disc_real
+        self.df = disc_fake
 
         # build Loss
         self.gen_loss   = - tf.reduce_mean(tf.log(disc_fake))
@@ -142,13 +142,13 @@ class PPGAN(object):
                     [self.train_gen, self.train_disc, self.gen_loss, self.disc_loss], 
                     feed_dict={self.input_real: batch_train})
                 # cost for test batch
-                d1, d2, test_G_cost, test_D_cost = sess.run(
-                    [self.debug1, self.debug2, self.gen_loss, self.disc_loss], 
+                dr, df, test_G_cost, test_D_cost = sess.run(
+                    [self.dr, self.df, self.gen_loss, self.disc_loss], 
                     feed_dict={self.input_real: batch_test})
-                print("real")
-                print(d1)
-                print("fake")
-                print(d2)
+                # print("real")
+                # print(dr)
+                # print("fake")
+                # print(df)
                 # record cost for each batch
                 avg_train_G_cost.append(train_G_cost)
                 avg_test_G_cost.append(test_G_cost)
