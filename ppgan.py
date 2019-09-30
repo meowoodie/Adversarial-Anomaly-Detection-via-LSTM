@@ -51,7 +51,7 @@ class PPGAN(object):
 
     def _gan_optimizer(self, batch_size, lr=1e-2):
         """
-        GAN Optimizer
+        adversarial optimizer
         """
         INIT_PARAM_RATIO = 1e-2
         # 1. define generator network with internal sampling that generates fake data 
@@ -111,7 +111,7 @@ class PPGAN(object):
     
     def _discriminator(self, encode):
         """
-        Discriminator
+        discriminator structure
         """
         # define discriminator weights
         last_layer     = encode # [batch_size, lstm_hidden_size]
@@ -120,13 +120,20 @@ class PPGAN(object):
         out_layer      = tf.nn.sigmoid(tf.matmul(last_layer, self.Ws[-1]) + self.bs[-1])
         return out_layer        # [batch_size, 1]
 
+    def discriminate(self, sess, batch_size, data):
+        """
+        discriminate data samples
+        """
+        result = sess.run(self.dr, feed_dict={self.input_real: data})
+        return result.mean()
+
     def train(self, sess, batch_size, 
             data,       # external input for the LSTM [n_data, step_size, n_output]
             test_ratio, # fraction of data only for test
             epoches=10, # number of epoches (how many times is the entire dataset going to be trained)
             lr=1e-2):   # learning rate
         """
-        Training
+        training procedure
         """
         # define optimizer
         self._gan_optimizer(batch_size, lr)
@@ -153,6 +160,7 @@ class PPGAN(object):
             avg_test_G_cost  = []
             avg_train_D_cost = []
             avg_test_D_cost  = []
+            avg_dr, avg_df   = [], []
             for b in range(n_batches):
                 idx             = np.arange(batch_size * b, batch_size * (b + 1))
                 # training and testing indices selected in current batch
@@ -166,17 +174,15 @@ class PPGAN(object):
                     [self.train_gen, self.train_disc, self.gen_loss, self.disc_loss], 
                     feed_dict={self.input_real: batch_train})
                 # cost for test batch
-                test_G_cost, test_D_cost = sess.run(
-                    [self.gen_loss, self.disc_loss], 
+                dr, df, test_G_cost, test_D_cost = sess.run(
+                    [self.dr, self.df, self.gen_loss, self.disc_loss], 
                     feed_dict={self.input_real: batch_test})
-                # for debug
-                dr, df, output = sess.run(
-                    [self.dr, self.df, self.gen_output], 
-                    feed_dict={self.input_real: batch_test})
-                print("real")
-                print(dr)
-                print("fake")
-                print(df)
+                avg_dr.append(dr)
+                avg_df.append(df)
+                # # for debug
+                # output = sess.run(
+                #     [self.gen_output], 
+                #     feed_dict={self.input_real: batch_test})
                 # print(output)
                 # record cost for each batch
                 avg_train_G_cost.append(train_G_cost)
@@ -189,9 +195,13 @@ class PPGAN(object):
             avg_test_G_cost  = np.mean(avg_test_G_cost)
             avg_train_D_cost = np.mean(avg_train_D_cost)
             avg_test_D_cost  = np.mean(avg_test_D_cost)
+            avg_dr           = np.concatenate(avg_dr, axis=0).mean()
+            avg_df           = np.concatenate(avg_df, axis=0).mean()
             print('[%s] Epoch %d (n_train_batches=%d, batch_size=%d)' % (arrow.now(), epoch, n_batches, batch_size), file=sys.stderr)
             print('[%s] Train cost:\tG:%f\tD:%f' % (arrow.now(), avg_train_G_cost, avg_train_D_cost), file=sys.stderr)
             print('[%s] Test cost:\tG:%f\tD:%f' % (arrow.now(), avg_test_G_cost, avg_test_D_cost), file=sys.stderr)
+            print('[%s] Real disc acc:\t%f' % (arrow.now(), avg_dr), file=sys.stderr)
+            print('[%s] Fake disc acc:\t%f' % (arrow.now(), avg_df), file=sys.stderr)
 
 
 
@@ -218,7 +228,7 @@ if __name__ == "__main__":
         batch_size = 5
         test_ratio = 0.3
         epoches    = 50
-        lr         = 1e-4
+        lr         = 1e-2
         n_tgrid    = 50
         n_sgrid    = 50
 
@@ -229,4 +239,15 @@ if __name__ == "__main__":
 
         # train via gan
         ppgan.train(sess, batch_size, data, test_ratio, epoches, lr)
-        # pprnn.visualize_lambda(sess, batch_size, data[:20, :, :], tlim=[0, .025], n_tgrid=1000, n_sgrid=20)
+
+        # test sequences with different length incrementally
+        for seq_len in range(3, 50):
+            test_data = data[:batch_size, :seq_len, :]
+            test_data = np.concatenate(
+                [test_data, np.ones([batch_size, 50 - seq_len, 3])],
+                axis=1)
+            # print(test_data)
+            result = ppgan.discriminate(sess, batch_size, test_data)
+            print(seq_len, result)
+
+        
