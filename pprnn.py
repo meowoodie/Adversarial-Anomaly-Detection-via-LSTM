@@ -159,37 +159,6 @@ class MSTPP_RNN(object):
         Given the last hidden state of the RNN, the function samples a single output (time and space) using 
         thinning algorithm based on the intensity function which is defined by the hidden state. 
         """
-        # DEPRECATED: NO GRADIENTS FOR TRAINABLE VARIABLES
-        # # thinning one spatio-temporal sample for each batch
-        # ts  = [] # [batch_size, 3]
-        # lam = [] # [batch_size, 1] 
-        # for b in range(batch_size):
-        #     # generate random spatio-temporal points in space ([0, 1], [0, 1], [0, 1])
-        #     cand_t   = tf.random.uniform(shape=[n_sample, 1], minval=last_t[b], maxval=1, dtype=tf.float32)
-        #     cand_t   = tf.contrib.framework.sort(cand_t, axis=0) # sort the random points in chronological order
-        #     cand_s   = tf.random.uniform(shape=[n_sample, 2], minval=-1, maxval=1, dtype=tf.float32)
-        #     cand_ts  = tf.concat([cand_t, cand_s], axis=1)
-        #     # generate acceptence rate matrix [batch_size, n_sample]
-        #     accept   = tf.random.uniform(shape=[n_sample, 1], minval=0, maxval=1, dtype=tf.float32)
-        #     # calculate lambda for each sample
-        #     state    = tf.nn.rnn_cell.LSTMStateTuple(
-        #         c=tf.tile(tf.expand_dims(lstm_state.c[b, :], 0), [n_sample, 1]),       # [n_sample, lstm_hidden_size]
-        #         h=tf.tile(tf.expand_dims(lstm_state.h[b, :], 0), [n_sample, 1]))       # [n_sample, lstm_hidden_size]
-        #     cand_lam = self._lambda(cand_ts, state)                                    # [n_sample, 1]
-        #     # reject samples
-        #     mask     = tf.squeeze(tf.cast(accept * upperb > cand_lam, dtype=tf.int32)) # [n_sample]
-        #     # get first non-zero sample
-        #     # NOTE: 
-        #     # the shape of return tensor of tf.gather cannot be inferred, which will lead to a ValueError
-        #     # (Cannot iterate over a shape with unknown rank). Because, function tf.nn.rnn_cell.BasicLSTMCell,
-        #     # requires the shape of inputs should be inferred via shape inference, as shown in
-        #     # https://www.tensorflow.org/api_docs/python/tf/nn/static_rnn
-        #     b_ts  = tf.gather_nd(cand_ts, tf.where(tf.not_equal(mask, 0)))[0]
-        #     b_lam = tf.gather_nd(cand_lam, tf.where(tf.not_equal(mask, 0)))[0]
-        #     ts.append(b_ts)
-        #     lam.append(b_lam)
-        # ts  = tf.stack(ts)
-        # lam = tf.stack(lam) 
         dts = tf.exp(tf.linalg.matmul(lstm_state.h, self.W1) + self.b1) # [batch_size, 3]
         t   = tf.expand_dims(dts[:, 0] + last_t, 1)
         s   = dts[:, 1:]
@@ -357,23 +326,6 @@ class MSTPP_RNN(object):
             print('[%s] Epoch %d (n_train_batches=%d, batch_size=%d)' % (arrow.now(), epoch, n_batches, batch_size), file=sys.stderr)
             print('[%s] Train cost:\t%f' % (arrow.now(), avg_train_cost), file=sys.stderr)
             print('[%s] Test cost:\t%f' % (arrow.now(), avg_test_cost), file=sys.stderr)
-    
-    # def visualize_lambda(self, sess, batch_size, data, ind=0, tlim=[0, 1], n_tgrid=1000, n_sgrid=20):
-    #     """
-    #     Visualize conditional intensity (Lambda) in spatio-temporal space as an animation
-    #     given a single trajectory `data` [1, step_size, output_size].
-    #     """
-    #     print(n_tgrid, n_sgrid)
-    #     outputs  = tf.stack(self.outputs, axis=1) # [batch_size, step_size, 3]
-    #     lam_eval = self._evaluate_lambda(outputs, self.states, tlim=[0., 1.], n_tgrid=n_tgrid, n_sgrid=n_sgrid) 
-    #     lam_eval = tf.squeeze(lam_eval)           # [batch_size, n_tgrid, n_sgrid, n_sgrid]
-
-    #     init_op = tf.global_variables_initializer()
-    #     sess.run(init_op)
-
-    #     _lam_eval = sess.run(lam_eval, feed_dict={self.input: data})
-    #     print(np.shape(_lam_eval))
-    #     utils.plot_spatial_intensity(_lam_eval[0], interval=50)
 
         
 
@@ -409,3 +361,54 @@ if __name__ == "__main__":
         # train via mle
         pprnn.train(sess, batch_size, data, test_ratio, n_tgrid, n_sgrid, epoches, lr)
         # pprnn.visualize_lambda(sess, batch_size, data[:20, :, :], tlim=[0, .025], n_tgrid=1000, n_sgrid=20)
+
+
+    # DEPRECATED: 
+    # def visualize_lambda(self, sess, batch_size, data, ind=0, tlim=[0, 1], n_tgrid=1000, n_sgrid=20):
+    #     """
+    #     Visualize conditional intensity (Lambda) in spatio-temporal space as an animation
+    #     given a single trajectory `data` [1, step_size, output_size].
+    #     """
+    #     print(n_tgrid, n_sgrid)
+    #     outputs  = tf.stack(self.outputs, axis=1) # [batch_size, step_size, 3]
+    #     lam_eval = self._evaluate_lambda(outputs, self.states, tlim=[0., 1.], n_tgrid=n_tgrid, n_sgrid=n_sgrid) 
+    #     lam_eval = tf.squeeze(lam_eval)           # [batch_size, n_tgrid, n_sgrid, n_sgrid]
+
+    #     init_op = tf.global_variables_initializer()
+    #     sess.run(init_op)
+
+    #     _lam_eval = sess.run(lam_eval, feed_dict={self.input: data})
+    #     print(np.shape(_lam_eval))
+    #     utils.plot_spatial_intensity(_lam_eval[0], interval=50)
+
+    # DEPRECATED: NO GRADIENTS FOR TRAINABLE VARIABLES
+    # # thinning one spatio-temporal sample for each batch
+    # ts  = [] # [batch_size, 3]
+    # lam = [] # [batch_size, 1] 
+    # for b in range(batch_size):
+    #     # generate random spatio-temporal points in space ([0, 1], [0, 1], [0, 1])
+    #     cand_t   = tf.random.uniform(shape=[n_sample, 1], minval=last_t[b], maxval=1, dtype=tf.float32)
+    #     cand_t   = tf.contrib.framework.sort(cand_t, axis=0) # sort the random points in chronological order
+    #     cand_s   = tf.random.uniform(shape=[n_sample, 2], minval=-1, maxval=1, dtype=tf.float32)
+    #     cand_ts  = tf.concat([cand_t, cand_s], axis=1)
+    #     # generate acceptence rate matrix [batch_size, n_sample]
+    #     accept   = tf.random.uniform(shape=[n_sample, 1], minval=0, maxval=1, dtype=tf.float32)
+    #     # calculate lambda for each sample
+    #     state    = tf.nn.rnn_cell.LSTMStateTuple(
+    #         c=tf.tile(tf.expand_dims(lstm_state.c[b, :], 0), [n_sample, 1]),       # [n_sample, lstm_hidden_size]
+    #         h=tf.tile(tf.expand_dims(lstm_state.h[b, :], 0), [n_sample, 1]))       # [n_sample, lstm_hidden_size]
+    #     cand_lam = self._lambda(cand_ts, state)                                    # [n_sample, 1]
+    #     # reject samples
+    #     mask     = tf.squeeze(tf.cast(accept * upperb > cand_lam, dtype=tf.int32)) # [n_sample]
+    #     # get first non-zero sample
+    #     # NOTE: 
+    #     # the shape of return tensor of tf.gather cannot be inferred, which will lead to a ValueError
+    #     # (Cannot iterate over a shape with unknown rank). Because, function tf.nn.rnn_cell.BasicLSTMCell,
+    #     # requires the shape of inputs should be inferred via shape inference, as shown in
+    #     # https://www.tensorflow.org/api_docs/python/tf/nn/static_rnn
+    #     b_ts  = tf.gather_nd(cand_ts, tf.where(tf.not_equal(mask, 0)))[0]
+    #     b_lam = tf.gather_nd(cand_lam, tf.where(tf.not_equal(mask, 0)))[0]
+    #     ts.append(b_ts)
+    #     lam.append(b_lam)
+    # ts  = tf.stack(ts)
+    # lam = tf.stack(lam) 
