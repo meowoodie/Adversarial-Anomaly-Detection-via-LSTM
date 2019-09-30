@@ -107,6 +107,8 @@ class MSTPP_RNN(object):
             h=tf.random_normal([batch_size, self.lstm_hidden_size])) # self.lstm_cell.zero_state(batch_size, dtype=tf.float32)
         # - init_t: initial output [batch_size, 1]
         init_t          = tf.zeros([batch_size], dtype=tf.float32)
+        # - data mask: [batch_size, step_size]
+        mask            = tf.cast(lstm_input[:, :, 0] < 1., dtype=tf.int32) if lstm_input is not None else None
         
         outputs = [] # (step_size [batch_size, n_output])
         lams    = [] # (step_size [batch_size, 1])
@@ -125,7 +127,7 @@ class MSTPP_RNN(object):
             # update last_t and last_lstm_state
             last_t          = output[:, 0] # [batch_size]
             last_lstm_state = lstm_state   # [2, batch_size, lstm_hidden_size]
-        return outputs, lams, states
+        return outputs, lams, states, mask
 
     def _customized_lstm_cell(self, 
             batch_size, 
@@ -225,9 +227,9 @@ class MSTPP_RNN(object):
             lam_eval.append(lam)                                 # [n_tgrid, batch_size * n_sgrid * n_sgrid, 1]
         lam_eval = tf.reshape(tf.stack(                          # [batch_size, n_tgrid, n_sgrid, n_sgrid, 1]
             lam_eval, axis=0), [b_size, n_tgrid, n_sgrid, n_sgrid, 1])
-        return lam_eval                                          # [batch_size, n_tgrid, n_sgrid, n_sgrid, 1]
+        return lam_eval                                          # [batch_size, n_tgrid, n_sgrid, n_sgrid, 1]     
 
-    def log_likelihood(self, outputs, lams, states, n_tgrid, n_sgrid):
+    def log_likelihood(self, outputs, lams, states, mask, n_tgrid, n_sgrid):
         """
         log likelihood given history embedding `lstm_state` and current point `ts`
         """
@@ -239,19 +241,20 @@ class MSTPP_RNN(object):
         lams     = tf.stack(lams, axis=1)    # [batch_size, step_size, 1]
 
         # first term: sum of log lambda given all the points 
-        loglik_1 = tf.reduce_sum(tf.log(lams), axis=1) # [batch_size, 1]
+        loglik_1 = tf.squeeze(tf.log(lams))  # [batch_size, step_size]
+        loglik_1 = tf.reduce_sum(            # [batch_size, 1]
+            tf.multiply(loglik_1, mask), axis=-1) 
         
         # second term: integration of lambda over entire spatio-temporal space
         lam_eval = self._evaluate_lambda(outputs, states, tlim=[0, 1], n_tgrid=n_tgrid, n_sgrid=n_sgrid) 
-        loglik_2 = tf.reduce_sum(lam_eval, axis=[1, 2, 3]) * \
+        loglik_2 = tf.squeeze(tf.reduce_sum(lam_eval, axis=[1, 2, 3])) * \
             tf.constant((1. / n_tgrid) * (2. / n_sgrid) * (2. / n_sgrid), dtype=tf.float32) # [batch_size, 1]
 
-        # # third term: sum of log pdf of marks
-        # # TODO: add marks term
+        # third term: sum of log pdf of marks
+        # TODO: add marks term
 
-        # # calculate log-likelihood
         loglik = loglik_1 - loglik_2
-        return loglik # [batch_size, 1]
+        return loglik # [batch_size]
 
     def mle_optimizer(self, batch_size, n_tgrid, n_sgrid):
         """
@@ -260,9 +263,9 @@ class MSTPP_RNN(object):
         # define input variable if external_tensor_input is None [batch_size, step_size, n_output]
         self.lstm_input = tf.placeholder(tf.float32, [None, self.step_size, self.n_output])
         # define network structure with external input
-        self.outputs, self.lams, self.states = self.create_recurrent_structure(batch_size, self.lstm_input)
+        self.outputs, self.lams, self.states, self.mask = self.create_recurrent_structure(batch_size, self.lstm_input)
         # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
-        loglik          = self.log_likelihood(self.outputs, self.lams, self.states, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
+        loglik          = self.log_likelihood(self.outputs, self.lams, self.states, self.mask, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
         self.cost       = - tf.reduce_mean(loglik)
         # Adam optimizer
         global_step     = tf.Variable(0, trainable=False)
@@ -315,7 +318,10 @@ class MSTPP_RNN(object):
                 # cost for train batch and test batch
                 train_cost = sess.run(self.cost, feed_dict={self.lstm_input: batch_train})
                 test_cost  = sess.run(self.cost, feed_dict={self.lstm_input: batch_test})
-                # print(train_cost, test_cost)
+                # for debug
+                # outputs, mask = sess.run([tf.stack(self.outputs, axis=1), self.mask], feed_dict={self.lstm_input: batch_train})
+                # print(outputs)
+                # print(mask)
                 # record cost for each batch
                 avg_train_cost.append(train_cost)
                 avg_test_cost.append(test_cost)
@@ -338,8 +344,11 @@ if __name__ == "__main__":
         # data preparation
         data       = np.load("data/northcal.earthquake.perseason.npy")
         da         = utils.DataAdapter(init_data=data, S=[[-1., 1.], [-1., 1.]], T=[0., 1.])
-        data       = da.normalize(data)[:, 1:21, :]
-        # print(data)
+        data       = da.normalize(data)[:, 1:51, :]
+        mask       = data == 0.
+        mask       = mask.astype(float)
+        data       = data + mask
+        print(data)
         # print(data.shape)
 
         # model configurations

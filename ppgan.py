@@ -13,14 +13,37 @@ import utils
 import numpy as np
 import tensorflow as tf
 
-from pprnn import MSTPP_RNN, pack_lstm_states
+from pprnn import MSTPP_RNN, pack_lstm_states, last_state_before_t
+
+def get_last_encode(mask, encodes):
+    """
+    helper function for getting the last encode (LSTM hidden state) for each batch
+    """
+    # mask    [batch_size, step_size]
+    # encodes [step_size, batch_size, lstm_hidden_size]
+
+    # size configuration
+    b_size = tf.shape(encodes)[1]        # batch_size
+    h_size = tf.shape(encodes)[2]        # lstm_hidden_size
+
+    # append a zero state at the begining of the points for each batch
+    # NOTE: for t < t_0, a zero state is applied here.
+    init_encode = tf.zeros([1, b_size, h_size])
+    encodes     = tf.concat([init_encode, encodes], axis=0)
+
+    inds   = tf.reduce_sum(mask, axis=1) # [batch_size]
+    i      = tf.range(0, b_size, 1)      # [batch_size]
+    last_encode = tf.scan(               # [batch_size, lstm_hidden_size]
+        lambda a, x: encodes[x[0], x[1], :],
+        (inds, i),
+        initializer=tf.zeros(h_size))
+    return last_encode
 
 class PPGAN(object):
 
     def __init__(self, step_size, lstm_hidden_size, disc_layer_sizes):
         """
         """
-        
         self.n_output         = 3
         self.step_size        = step_size
         self.lstm_hidden_size = lstm_hidden_size
@@ -33,9 +56,10 @@ class PPGAN(object):
         INIT_PARAM_RATIO = 1e-2
         # 1. define generator network with internal sampling that generates fake data 
         with tf.variable_scope("generator") as scope:
-            self.generator    = MSTPP_RNN(self.step_size, self.lstm_hidden_size)
-            input_fake, _, _  = self.generator.create_recurrent_structure(batch_size)             # fake input [batch_size, step_size, n_output]
-            input_fake        = tf.stack(input_fake, axis=1)
+            self.generator       = MSTPP_RNN(self.step_size, self.lstm_hidden_size)
+            input_fake, _, _, _  = self.generator.create_recurrent_structure(batch_size) # fake input [batch_size, step_size, n_output]
+            input_fake           = tf.stack(input_fake, axis=1)
+            self.gen_output      = input_fake
         # 2. define discriminator network with external input that takes real data as input
         with tf.variable_scope("discriminator") as scope:
             self.encoder      = MSTPP_RNN(self.step_size, self.lstm_hidden_size)
@@ -57,14 +81,16 @@ class PPGAN(object):
             # real input [batch_size, step_size, n_output]
             self.input_real   = tf.placeholder(tf.float32, [None, self.step_size, self.n_output]) 
             # encode for real input (step_size [batch_size, lstm_hidden_size])
-            _, _, encode_real = self.encoder.create_recurrent_structure(batch_size, self.input_real)   
+            _, _, encode_real, mask_real = self.encoder.create_recurrent_structure(batch_size, self.input_real)   
             # encode for fake input (step_size [batch_size, lstm_hidden_size])
-            _, _, encode_fake = self.encoder.create_recurrent_structure(batch_size, input_fake)   
-        
-        encode_real_c, encode_real_h = pack_lstm_states(encode_real) # 2 * [step_size, batch_size, lstm_hidden_size]
-        encode_fake_c, encode_fake_h = pack_lstm_states(encode_fake) # 2 * [step_size, batch_size, lstm_hidden_size]
-        disc_real = self._discriminator(encode_real_h[-1, :, :])     # [batch_size, 1]
-        disc_fake = self._discriminator(encode_fake_h[-1, :, :])     # [batch_size, 1]
+            _, _, encode_fake, mask_fake = self.encoder.create_recurrent_structure(batch_size, input_fake)  
+            
+        encode_real_c, encode_real_h = pack_lstm_states(encode_real)   # 2 * [step_size, batch_size, lstm_hidden_size]
+        encode_fake_c, encode_fake_h = pack_lstm_states(encode_fake)   # 2 * [step_size, batch_size, lstm_hidden_size]
+        last_encode_real_h = get_last_encode(mask_real, encode_real_h) # [batch_size, lstm_hidden_size]
+        last_encode_fake_h = get_last_encode(mask_fake, encode_fake_h) # [batch_size, lstm_hidden_size]
+        disc_real = self._discriminator(last_encode_real_h)            # [batch_size, 1]
+        disc_fake = self._discriminator(last_encode_fake_h)            # [batch_size, 1]
 
         self.dr = disc_real
         self.df = disc_fake
@@ -93,12 +119,10 @@ class PPGAN(object):
             last_layer = tf.nn.relu(tf.matmul(last_layer, self.Ws[i]) + self.bs[i])
         out_layer      = tf.nn.sigmoid(tf.matmul(last_layer, self.Ws[-1]) + self.bs[-1])
         return out_layer        # [batch_size, 1]
-    
+
     def train(self, sess, batch_size, 
             data,       # external input for the LSTM [n_data, step_size, n_output]
             test_ratio, # fraction of data only for test
-            # n_tgrid=20, # number of grid in time 
-            # n_sgrid=20, # number of grid in space
             epoches=10, # number of epoches (how many times is the entire dataset going to be trained)
             lr=1e-2):   # learning rate
         """
@@ -142,13 +166,18 @@ class PPGAN(object):
                     [self.train_gen, self.train_disc, self.gen_loss, self.disc_loss], 
                     feed_dict={self.input_real: batch_train})
                 # cost for test batch
-                dr, df, test_G_cost, test_D_cost = sess.run(
-                    [self.dr, self.df, self.gen_loss, self.disc_loss], 
+                test_G_cost, test_D_cost = sess.run(
+                    [self.gen_loss, self.disc_loss], 
                     feed_dict={self.input_real: batch_test})
-                # print("real")
-                # print(dr)
-                # print("fake")
-                # print(df)
+                # for debug
+                dr, df, output = sess.run(
+                    [self.dr, self.df, self.gen_output], 
+                    feed_dict={self.input_real: batch_test})
+                print("real")
+                print(dr)
+                print("fake")
+                print(df)
+                # print(output)
                 # record cost for each batch
                 avg_train_G_cost.append(train_G_cost)
                 avg_test_G_cost.append(test_G_cost)
@@ -175,8 +204,11 @@ if __name__ == "__main__":
         # data preparation
         data       = np.load("data/northcal.earthquake.perseason.npy")
         da         = utils.DataAdapter(init_data=data, S=[[-1., 1.], [-1., 1.]], T=[0., 1.])
-        data       = da.normalize(data)[:, 1:11, :]
-        # print(data)
+        data       = da.normalize(data)[:, 1:51, :]
+        mask       = data == 0.
+        mask       = mask.astype(float)
+        data       = data + mask
+        print(data)
         # print(data.shape)
 
         # model configurations
@@ -185,10 +217,10 @@ if __name__ == "__main__":
         step_size  = np.shape(data)[1]
         batch_size = 5
         test_ratio = 0.3
-        epoches    = 100
+        epoches    = 50
         lr         = 1e-4
-        n_tgrid    = 20
-        n_sgrid    = 20
+        n_tgrid    = 50
+        n_sgrid    = 50
 
         print(data[0, :, :])
 
