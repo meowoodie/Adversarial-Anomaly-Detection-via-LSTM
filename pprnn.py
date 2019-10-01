@@ -237,12 +237,13 @@ class MSTPP_RNN(object):
         # - outputs (step_size [batch_size, n_output])
         # - lams    (step_size [batch_size, 1])
         # - states  (step_size [2, batch_size, lstm_hidden_size])
-        outputs  = tf.stack(outputs, axis=1) # [batch_size, step_size, 3]
-        lams     = tf.stack(lams, axis=1)    # [batch_size, step_size, 1]
+        outputs  = tf.stack(outputs, axis=1)       # [batch_size, step_size, 3]
+        lams     = tf.stack(lams, axis=1)          # [batch_size, step_size, 1]
+        mask     = tf.cast(mask, dtype=tf.float32) # [batch_size, step_size]
 
         # first term: sum of log lambda given all the points 
-        loglik_1 = tf.squeeze(tf.log(lams))  # [batch_size, step_size]
-        loglik_1 = tf.reduce_sum(            # [batch_size, 1]
+        loglik_1 = tf.squeeze(tf.log(lams))        # [batch_size, step_size]
+        loglik_1 = tf.reduce_sum(                  # [batch_size, 1]
             tf.multiply(loglik_1, mask), axis=-1) 
         
         # second term: integration of lambda over entire spatio-temporal space
@@ -256,7 +257,7 @@ class MSTPP_RNN(object):
         loglik = loglik_1 - loglik_2
         return loglik # [batch_size]
 
-    def mle_optimizer(self, batch_size, n_tgrid, n_sgrid):
+    def mle_optimizer(self, batch_size, n_tgrid, n_sgrid, lr):
         """
         MLE Optimizer
         """
@@ -265,13 +266,13 @@ class MSTPP_RNN(object):
         # define network structure with external input
         self.outputs, self.lams, self.states, self.mask = self.create_recurrent_structure(batch_size, self.lstm_input)
         # TODO: add outputs truncations (remove outputs that corresponds to the zero paddings)
-        loglik          = self.log_likelihood(self.outputs, self.lams, self.states, self.mask, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
-        self.cost       = - tf.reduce_mean(loglik)
+        self.loglik     = self.log_likelihood(self.outputs, self.lams, self.states, self.mask, n_tgrid=n_tgrid, n_sgrid=n_sgrid)
+        self.cost       = - tf.reduce_mean(self.loglik)
         # Adam optimizer
         global_step     = tf.Variable(0, trainable=False)
         learning_rate   = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
         self.optimizer  = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(self.cost, global_step=global_step)
-
+    
     def train(self, sess, batch_size, 
             data,       # external input for the LSTM [n_data, step_size, n_output]
             test_ratio, # fraction of data only for test
@@ -283,7 +284,7 @@ class MSTPP_RNN(object):
         Training
         """
         # define optimizer
-        self.mle_optimizer(batch_size, n_tgrid, n_sgrid)
+        self.mle_optimizer(batch_size, n_tgrid, n_sgrid, lr)
         # initialize variables
         init_op = tf.global_variables_initializer()
         sess.run(init_op)

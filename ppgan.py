@@ -205,49 +205,49 @@ class PPGAN(object):
 
 
 
-if __name__ == "__main__":
-    np.set_printoptions(suppress=True)
-    # np.random.seed(1)
-    # tf.set_random_seed(1)
+# if __name__ == "__main__":
+#     np.set_printoptions(suppress=True)
+#     # np.random.seed(1)
+#     # tf.set_random_seed(1)
 
-    with tf.Session() as sess:
-        # data preparation
-        data       = np.load("data/northcal.earthquake.perseason.npy")
-        da         = utils.DataAdapter(init_data=data, S=[[-1., 1.], [-1., 1.]], T=[0., 1.])
-        data       = da.normalize(data)[:, 1:51, :]
-        mask       = data == 0.
-        mask       = mask.astype(float)
-        data       = data + mask
-        print(data)
-        # print(data.shape)
+#     with tf.Session() as sess:
+#         # data preparation
+#         data       = np.load("data/northcal.earthquake.perseason.npy")
+#         da         = utils.DataAdapter(init_data=data, S=[[-1., 1.], [-1., 1.]], T=[0., 1.])
+#         data       = da.normalize(data)[:, 1:51, :]
+#         mask       = data == 0.
+#         mask       = mask.astype(float)
+#         data       = data + mask
+#         print(data)
+#         # print(data.shape)
 
-        # model configurations
-        lstm_hidden_size = 10
-        # training configurations
-        step_size  = np.shape(data)[1]
-        batch_size = 5
-        test_ratio = 0.3
-        epoches    = 50
-        lr         = 1e-2
-        n_tgrid    = 50
-        n_sgrid    = 50
+#         # model configurations
+#         lstm_hidden_size = 10
+#         # training configurations
+#         step_size  = np.shape(data)[1]
+#         batch_size = 5
+#         test_ratio = 0.3
+#         epoches    = 50
+#         lr         = 1e-2
+#         n_tgrid    = 50
+#         n_sgrid    = 50
 
-        print(data[0, :, :])
+#         print(data[0, :, :])
 
-        # define PPGAN
-        ppgan = PPGAN(step_size, lstm_hidden_size, disc_layer_sizes=[20, 10])
+#         # define PPGAN
+#         ppgan = PPGAN(step_size, lstm_hidden_size, disc_layer_sizes=[20, 10])
 
-        # train via gan
-        ppgan.train(sess, batch_size, data, test_ratio, epoches, lr)
+#         # train via gan
+#         ppgan.train(sess, batch_size, data, test_ratio, epoches, lr)
 
-        # test sequences with different length incrementally
-        for seq_len in range(3, 50):
-            test_data = data[:batch_size, :seq_len, :]
-            test_data = np.concatenate(
-                [test_data, np.ones([batch_size, 50 - seq_len, 3])],
-                axis=1)
-            # print(test_data)
-            result = ppgan.discriminate(sess, batch_size, test_data)
-            print(seq_len, result)
+#         # test sequences with different length incrementally
+#         for seq_len in range(3, 50):
+#             test_data = data[:batch_size, :seq_len, :]
+#             test_data = np.concatenate(
+#                 [test_data, np.ones([batch_size, 50 - seq_len, 3])],
+#                 axis=1)
+#             # print(test_data)
+#             result = ppgan.discriminate(sess, batch_size, test_data)
+#             print(seq_len, result)
 
         
