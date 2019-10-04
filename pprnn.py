@@ -102,9 +102,10 @@ class MSTPP_RNN(object):
         # - define initial basic LSTM hidden state [2, batch_size, lstm_hidden_size]
         #   * lstm_state.h: hidden state [batch_size, lstm_hidden_size]
         #   * lstm_state.c: cell state   [batch_size, lstm_hidden_size]
-        init_lstm_state = tf.nn.rnn_cell.LSTMStateTuple(
-            c=tf.random_normal([batch_size, self.lstm_hidden_size]), 
-            h=tf.random_normal([batch_size, self.lstm_hidden_size])) # self.lstm_cell.zero_state(batch_size, dtype=tf.float32)
+        # init_lstm_state = tf.nn.rnn_cell.LSTMStateTuple(
+        #     c=tf.random_normal([batch_size, self.lstm_hidden_size]), 
+        #     h=tf.random_normal([batch_size, self.lstm_hidden_size])) 
+        init_lstm_state = self.lstm_cell.zero_state(batch_size, dtype=tf.float32)
         # - init_t: initial output [batch_size, 1]
         init_t          = tf.zeros([batch_size], dtype=tf.float32)
         # - data mask: [batch_size, step_size]
@@ -272,6 +273,14 @@ class MSTPP_RNN(object):
         global_step     = tf.Variable(0, trainable=False)
         learning_rate   = tf.train.exponential_decay(lr, global_step, decay_steps=100, decay_rate=0.99, staircase=True)
         self.optimizer  = tf.train.AdamOptimizer(learning_rate, beta1=0.6, beta2=0.9).minimize(self.cost, global_step=global_step)
+
+    def get_data_embeddings(self, sess, data):
+        """
+        return the final embeddings for the input data
+        """
+        embeddings      = self.states[-1].h # [batch_size, lstm_hidden_size]
+        eval_embeddings = sess.run(embeddings, feed_dict={self.lstm_input: data})
+        return eval_embeddings
     
     def train(self, sess, batch_size, 
             data,       # external input for the LSTM [n_data, step_size, n_output]
