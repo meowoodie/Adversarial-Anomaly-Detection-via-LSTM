@@ -102,10 +102,10 @@ class MSTPP_RNN(object):
         # - define initial basic LSTM hidden state [2, batch_size, lstm_hidden_size]
         #   * lstm_state.h: hidden state [batch_size, lstm_hidden_size]
         #   * lstm_state.c: cell state   [batch_size, lstm_hidden_size]
-        # init_lstm_state = tf.nn.rnn_cell.LSTMStateTuple(
-        #     c=tf.random_normal([batch_size, self.lstm_hidden_size]), 
-        #     h=tf.random_normal([batch_size, self.lstm_hidden_size])) 
-        init_lstm_state = self.lstm_cell.zero_state(batch_size, dtype=tf.float32)
+        init_lstm_state = tf.nn.rnn_cell.LSTMStateTuple(
+            c=tf.random_normal([batch_size, self.lstm_hidden_size]), 
+            h=tf.random_normal([batch_size, self.lstm_hidden_size])) 
+        # init_lstm_state = self.lstm_cell.zero_state(batch_size, dtype=tf.float32)
         # - init_t: initial output [batch_size, 1]
         init_t          = tf.zeros([batch_size], dtype=tf.float32)
         # - data mask: [batch_size, step_size]
