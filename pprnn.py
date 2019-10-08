@@ -79,7 +79,7 @@ class MSTPP_RNN(object):
         """
         Args:
         """
-        INIT_PARAM_RATIO       = 1 # 1e-2
+        INIT_PARAM_RATIO       = 1e-2
         # model hyper-parameters
         self.n_output          = 3
         self.lstm_hidden_size  = lstm_hidden_size # size of hidden states
