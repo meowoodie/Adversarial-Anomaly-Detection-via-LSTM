@@ -19,7 +19,7 @@ def read_results(filepath):
 
 if __name__ == "__main__":
     # filename = "gan_earthquake"
-    filename = "pca_macys"
+    filename = "pca_earthquake"
     seq_lens, normal_accs, abnormal_accs = read_results("result/%s.txt" % filename)
 
     print(normal_accs)
@@ -40,7 +40,7 @@ if __name__ == "__main__":
         line1 = ax.plot(seq_lens, abnormal_accs, linestyle="-", color='blue')
         line2 = ax.plot(seq_lens, normal_accs, linestyle="-", color='gray')
 
-        ax.legend(['Anomaly data', 'Random normal data'], fontsize=15, loc="upper left")
+        ax.legend(['Anomaly data', 'Random normal data'], fontsize=15, loc="bottom right")
 
         # plt.show()
         pdf.savefig(fig)

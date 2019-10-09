@@ -24,7 +24,7 @@ def generate_fake_test_data(batch_size, seq_len):
     # test_s    = np.random.normal(loc=0.3, scale=1., size=[batch_size, n, 2])
     data = []
     for i in range(batch_size):
-        n         = np.random.poisson(lam=int(seq_len/2)) 
+        n         = np.random.poisson(lam=int(50)) 
         n         = n if n < seq_len else seq_len
         test_t    = np.random.uniform(low=0., high=1., size=[n, 1])
         test_t.sort(axis=0)
@@ -43,14 +43,14 @@ def calculate_pairwise_distance(real_embeddings, fake_embeddings):
 if __name__ == "__main__":
     np.set_printoptions(suppress=True)
 
-    test_fake_data1 = generate_fake_test_data(129, 55)
-    test_fake_data2 = generate_fake_test_data(129, 100)
+    test_fake_data1 = generate_fake_test_data(500, 55)
+    test_fake_data2 = generate_fake_test_data(500, 100)
 
-    print(test_fake_data1[0])
+    print(test_fake_data2[0])
     print(test_fake_data1.shape)
     print(test_fake_data2.shape)
 
-    np.save("fake_macys", test_fake_data1)
+    # np.save("fake_macys", test_fake_data1)
     np.save("fake_earthquake", test_fake_data2)
 
     # with tf.Session() as sess:
