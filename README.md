@@ -11,11 +11,16 @@ The major contribution of this work is two-fold: (1) The work has obtained a rob
 
 Our framework is illustrated as follows:
 <p align="center"> 
-<img src=https://github.com/meowoodie/Adversarial-Anomaly-Detection-via-LSTM/blob/master/imgs/model.png width="40%">
+<img src=https://github.com/meowoodie/Adversarial-Anomaly-Detection-via-LSTM/blob/master/imgs/model.png width="60%">
 </p>
+
+> Model structure 
+
 <p align="center"> 
-<img src=https://github.com/meowoodie/Adversarial-Anomaly-Detection-via-LSTM/blob/master/imgs/architecture.png width="80%">
+<img src=https://github.com/meowoodie/Adversarial-Anomaly-Detection-via-LSTM/blob/master/imgs/architecture.png width="100%">
 </p>
+
+> Adversarial learning framework
 
 Demo
 ---
